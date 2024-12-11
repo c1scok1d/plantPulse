@@ -249,10 +249,8 @@ void monitor()
         float battery = getBattery(err);
         int moisture = readMoisture();
         
-        // Retrieve the hostname from the structure
-        //onst char* hostname = main_struct.hostname;
 
-        uploadReadings(moisture, battery, main_struct.hostname, "sensorName", "sensorLocation");
+        uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
         count ++;
         vTaskDelay(pdMS_TO_TICKS(5000));  // Delay for 5 seconds
 
