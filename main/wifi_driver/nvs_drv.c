@@ -5,7 +5,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 
-esp_err_t save_to_nvs(const char *ssid, const char *password, uint8_t value)
+esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *location, uint8_t value)
 {
     nvs_handle_t nvs_handle;
     esp_err_t err;
@@ -36,6 +36,24 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, uint8_t value)
         return err;
     }
 
+    // Save Name
+    err = nvs_set_str(nvs_handle, "name", name);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE("NVS", "Failed to write device name!");
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    // Save Location
+    err = nvs_set_str(nvs_handle, "location", location);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE("NVS", "Failed to write device location!");
+        nvs_close(nvs_handle);
+        return err;
+    }
+
     // Save uint8_t value
     err = nvs_set_u8(nvs_handle, "wifi_value", value);
     if (err != ESP_OK)
@@ -62,7 +80,7 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, uint8_t value)
     return err;
 }
 
-esp_err_t read_from_nvs(char *ssid, char *password, uint8_t *value)
+esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, uint8_t *value)
 {
     nvs_handle_t nvs_handle;
     esp_err_t err;
@@ -114,6 +132,48 @@ esp_err_t read_from_nvs(char *ssid, char *password, uint8_t *value)
     else if (err != ESP_OK)
     {
         ESP_LOGE("NVS", "Failed to read Password!");
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    // Read Name
+    
+    err = nvs_get_str(nvs_handle, "name", name, &pass_len);
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGW("NVS", "Device name not found. Setting default value.");
+        err = nvs_set_str(nvs_handle, "name", "Device");
+        if (err != ESP_OK)
+        {
+            ESP_LOGE("NVS", "Failed to set default device name!");
+            nvs_close(nvs_handle);
+            return err;
+        }
+    }
+    else if (err != ESP_OK)
+    {
+        ESP_LOGE("NVS", "Failed to read device name!");
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    // Read Location
+    
+    err = nvs_get_str(nvs_handle, "location", location, &pass_len);
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGW("NVS", "Device location not found. Setting default value.");
+        err = nvs_set_str(nvs_handle, "location", "Location");
+        if (err != ESP_OK)
+        {
+            ESP_LOGE("NVS", "Failed to set default device location!");
+            nvs_close(nvs_handle);
+            return err;
+        }
+    }
+    else if (err != ESP_OK)
+    {
+        ESP_LOGE("NVS", "Failed to read device loction!");
         nvs_close(nvs_handle);
         return err;
     }

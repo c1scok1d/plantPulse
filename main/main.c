@@ -23,6 +23,8 @@
 
 #define SSID_CHR_UUID 0xFEF4
 #define PASS_CHR_UUID 0xFEF5
+#define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
+#define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
 #define PROV_STATUS_UUID 0xDEAD
 #define MANUFACTURER_NAME "Rodland Farms"
 
@@ -89,6 +91,20 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         ESP_LOGI(TAG, "Received Password: %s", main_struct.password);
         break;
 
+    case NAME_CHR_UUID:
+        ssid_pswd_flag[1] = true;
+        strncpy(main_struct.name, (char *)ctxt->om->om_data, ctxt->om->om_len);
+        main_struct.name[ctxt->om->om_len] = '\0';
+        ESP_LOGI(TAG, "Received Device Name: %s", main_struct.password);
+        break;
+    
+    case LOCATION_CHR_UUID:
+        ssid_pswd_flag[1] = true;
+        strncpy(main_struct.location, (char *)ctxt->om->om_data, ctxt->om->om_len);
+        main_struct.location[ctxt->om->om_len] = '\0';
+        ESP_LOGI(TAG, "Received Device Location: %s", main_struct.password);
+        break;
+
     default:
         ESP_LOGW(TAG, "Unknown characteristic written.");
         return BLE_ATT_ERR_UNLIKELY;
@@ -99,7 +115,7 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 
         main_struct.credentials_recv = true;
 
-        save_to_nvs(main_struct.ssid, main_struct.password, main_struct.credentials_recv);
+        save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.credentials_recv);
         printf("Password saved to %s\n", main_struct.password);
         printf("ssid to %s\n", main_struct.ssid);
         printf("wvalue %d\n", main_struct.credentials_recv);
@@ -124,16 +140,18 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
      .type = BLE_GATT_SVC_TYPE_PRIMARY,
      .uuid = BLE_UUID16_DECLARE(0x180), // Define UUID for device type
      .characteristics = (struct ble_gatt_chr_def[]){
-         {.uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // Define UUID for writing ssid
+         {.uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // Existing SSID characteristic
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},
-         {.uuid = BLE_UUID16_DECLARE(PASS_CHR_UUID), // Define UUID for writing pswd
+         {.uuid = BLE_UUID16_DECLARE(PASS_CHR_UUID), // Existing Password characteristic
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},
-         {.uuid = BLE_UUID16_DECLARE(PROV_STATUS_UUID), // Define UUID for reading
-          .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-          .access_cb = device_read,
-          .val_handle = &prov_status_attr_handle},
+         {.uuid = BLE_UUID16_DECLARE(NAME_CHR_UUID), // New Sensor Name characteristic
+          .flags = BLE_GATT_CHR_F_WRITE,
+          .access_cb = device_write},  // Write callback function for sensorName
+         {.uuid = BLE_UUID16_DECLARE(LOCATION_CHR_UUID), // New Sensor Location characteristic
+          .flags = BLE_GATT_CHR_F_WRITE,
+          .access_cb = device_write},  // Write callback function for sensorLocation
          {0}}},
     {0} // No more service
 };
@@ -307,7 +325,7 @@ void app_main() {
     adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
 
     nvs_init();
-    read_from_nvs(main_struct.ssid, main_struct.password, &main_struct.credentials_recv);
+    read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, &main_struct.credentials_recv);
 
     // Only initialize BLE if credentials are NOT set
     //if (!main_struct.credentials_recv) {

@@ -6,6 +6,9 @@ typedef struct
     uint8_t isProvisioned;
     char ssid[32];
     char password[64];
+    // Define variables to store the sensor name and location
+    char name[32];
+    char location[32];
     uint8_t credentials_recv;
     char hostname[13];
 
