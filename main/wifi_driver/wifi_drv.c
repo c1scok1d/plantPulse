@@ -40,12 +40,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             uint8_t mac[6];
             esp_wifi_get_mac(ESP_IF_WIFI_STA, mac);
 
-            // Convert the MAC address to a string without colons
-    snprintf(main_struct.hostname, MAX_HOSTNAME_LEN, "%02X%02X%02X%02X%02X%02X",
+            // set hostname to the MAC address without colons
+            snprintf(main_struct.hostname, MAX_HOSTNAME_LEN, "%02X%02X%02X%02X%02X%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-            // Log the assigned hostname
-            ESP_LOGI(TAG, "Assigned hostname: %s", main_struct.hostname);
             ESP_LOGI(TAG, "Wi-Fi Connected");
         }
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
