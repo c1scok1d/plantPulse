@@ -43,6 +43,7 @@ void ble_app_advertise(void);
 // Notification function for PROV_STATUS_UUID
 void notify_prov_status(uint8_t status_data)
 {
+    char *TAG = "NOTIFY";
     if (g_conn_handle != BLE_HS_CONN_HANDLE_NONE)
     {
         struct os_mbuf *om = ble_hs_mbuf_from_flat(&status_data, sizeof(status_data));
@@ -71,6 +72,7 @@ void notify_prov_status(uint8_t status_data)
 // Write data to ESP32 defined as server
 static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
+    char *TAG = "WRITE";
     switch (ble_uuid_u16(ctxt->chr->uuid))
     {
     case SSID_CHR_UUID:
@@ -187,15 +189,9 @@ void ble_app_advertise(void)
     ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);
 }
 
-// The application
-void ble_app_on_sync(void)
-{
-    ble_hs_id_infer_auto(0, &ble_addr_type); // Determines the best address type automatically
-    ble_app_advertise();                     // Define the BLE connection
-}
-
 static void nimble_host_task(void *param)
 {
+    char *TAG = "NimBLE";
     // Task entry log 
     ESP_LOGI(TAG, "NimBLE host task has been started!");
 
@@ -208,6 +204,7 @@ static void nimble_host_task(void *param)
 
 void disable_ble(void)
 {
+    char *TAG = "DISABLE_BLE";
     // Stop BLE advertising if running
     int rc = ble_gap_adv_stop();
     if (rc == 0) {
@@ -222,6 +219,7 @@ void disable_ble(void)
 
 void check_credentials(void *arg)
 {
+    char *TAG = "CHECK_CREDS";
     while (1)
     {
         //if (main_struct.credentials_recv)
@@ -261,38 +259,73 @@ void notify_status(void *arg)
         vTaskDelay(pdMS_TO_TICKS(500)); // Check every second
     }
 }
+// Helper function to convert the MAC address to a string
+void mac_to_string(uint8_t *mac, char *mac_str) {
+    // Format only the last 4 bytes of the MAC address into the string
+    sprintf(mac_str, "%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
+}
+
+
+// BLE sync callback function
+void ble_app_on_sync(void)
+{
+    // The BLE stack is now synchronized and ready to run BLE operations
+    ESP_LOGI(TAG, "BLE sync completed.");
+
+    // Retrieve the MAC address
+    uint8_t mac[6];   // Array to hold the MAC address (6 bytes)
+    char device_name[32];  // Buffer to hold the MAC address as a string
+
+    // Automatically infer the address type and MAC address
+    ble_hs_id_infer_auto(0, &ble_addr_type);  // Infers the address type
+    ble_hs_id_infer_auto(0, mac);  // Retrieves the MAC address
+
+    // Convert only the last 4 bytes of the MAC address to string (without colons)
+    mac_to_string(mac + 2, device_name);  // Only use last 4 bytes of MAC address
+
+    // Create final device name with "PlantPulse-" prefix and the last 4 bytes of the MAC address
+    char final_device_name[50];  // Ensure enough space for "PlantPulse-" + MAC address
+    snprintf(final_device_name, sizeof(final_device_name), "PlantPulse-%s", device_name);
+
+    // Set the BLE device name
+    ble_svc_gap_device_name_set(final_device_name);  // Set the device name
+    
+    ESP_LOGI(TAG, "Device BLE name set to: %s", final_device_name);
+
+    // Initialize services
+    ble_svc_gap_init();                        // Initialize NimBLE GAP service
+    ble_svc_gatt_init();                       // Initialize NimBLE GATT service
+    ble_gatts_count_cfg(gatt_svcs);            // Initialize NimBLE config GATT services
+    ble_gatts_add_svcs(gatt_svcs);             // Add GATT services
+}
 
 // Main application entry point
 void app_main() {
-
+    char *TAG = "MAIN";
     // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation
     adc1_config_width(ADC_WIDTH_BIT_12);  // Set ADC width to 12 bits (0-4095 range)
     adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
 
-
-    
     nvs_init();
     read_from_nvs(main_struct.ssid, main_struct.password, &main_struct.credentials_recv);
 
     // Only initialize BLE if credentials are NOT set
-    if (!main_struct.credentials_recv) {
-        // Initialize NimBLE host and start advertising for provisioning
-        nimble_port_init();                        // 3 - Initialize the host stack
-        ble_svc_gap_device_name_set("PlantPulse"); // 4 - Set BLE device name
-        ble_svc_gap_init();                        // 4 - Initialize NimBLE GAP service
-        ble_svc_gatt_init();                       // 4 - Initialize NimBLE GATT service
-        ble_gatts_count_cfg(gatt_svcs);            // 4 - Initialize NimBLE config GATT services
-        ble_gatts_add_svcs(gatt_svcs);             // 4 - Add GATT services
-        ble_hs_cfg.sync_cb = ble_app_on_sync;      // 5 - Initialize the application
+    //if (!main_struct.credentials_recv) {
+        // Initialize NimBLE host stack
+        nimble_port_init();  // Step 1: Initialize the host stack
+
+        // Set up the sync callback (this will be used later in sync events)
+        ble_hs_cfg.sync_cb = ble_app_on_sync;  // Step 2: Set the sync callback function
+
 
         // Start NimBLE host task thread and return 
         xTaskCreate(nimble_host_task, "PlantPulse", 4 * 1024, NULL, 5, NULL);
         // Task entry log 
         ESP_LOGI(TAG, "NimBLE host task has been started!");
 
-    } else {
-        ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
-    } 
+    //} else {
+    //    ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
+    //} 
 
     // Start moisture reading in a separate FreeRTOS task
     //xTaskCreate(monitor, "monitor", 4 * 1024, NULL, 5, NULL);
