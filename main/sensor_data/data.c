@@ -11,7 +11,7 @@
 #include "esp_sleep.h"
 #include "driver/i2c.h"
 #include "rest_methods.h"
-
+//foo
 static const char *TAG = "DATA";
 #define I2C_MASTER_SDA_IO    16      // GPI016 is SDA
 #define I2C_MASTER_SCL_IO    17       // GPI017 is SCL
