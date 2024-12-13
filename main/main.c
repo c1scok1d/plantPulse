@@ -40,7 +40,6 @@ uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t prov_status_attr_handle = 0;
 
 main_struct_t main_struct = {.credentials_recv = 0, .isProvisioned = false};
-void ble_app_advertise(void);
 
 // Notification function for PROV_STATUS_UUID
 void notify_prov_status(uint8_t status_data)
@@ -95,14 +94,14 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         ssid_pswd_flag[1] = true;
         strncpy(main_struct.name, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.name[ctxt->om->om_len] = '\0';
-        ESP_LOGI(TAG, "Received Device Name: %s", main_struct.password);
+        ESP_LOGI(TAG, "Received Device Name: %s", main_struct.name);
         break;
     
     case LOCATION_CHR_UUID:
         ssid_pswd_flag[1] = true;
         strncpy(main_struct.location, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.location[ctxt->om->om_len] = '\0';
-        ESP_LOGI(TAG, "Received Device Location: %s", main_struct.password);
+        ESP_LOGI(TAG, "Received Device Location: %s", main_struct.location);
         break;
 
     default:
@@ -140,16 +139,16 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
      .type = BLE_GATT_SVC_TYPE_PRIMARY,
      .uuid = BLE_UUID16_DECLARE(0x180), // Define UUID for device type
      .characteristics = (struct ble_gatt_chr_def[]){
-         {.uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // Existing SSID characteristic
+         {.uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // SSID characteristic
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},
-         {.uuid = BLE_UUID16_DECLARE(PASS_CHR_UUID), // Existing Password characteristic
+         {.uuid = BLE_UUID16_DECLARE(PASS_CHR_UUID), // Password characteristic
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},
-         {.uuid = BLE_UUID16_DECLARE(NAME_CHR_UUID), // New Sensor Name characteristic
+         {.uuid = BLE_UUID16_DECLARE(NAME_CHR_UUID), // ensor Name characteristic
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},  // Write callback function for sensorName
-         {.uuid = BLE_UUID16_DECLARE(LOCATION_CHR_UUID), // New Sensor Location characteristic
+         {.uuid = BLE_UUID16_DECLARE(LOCATION_CHR_UUID), // Sensor Location characteristic
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},  // Write callback function for sensorLocation
          {0}}},
@@ -185,6 +184,8 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
+#define MANUFACTURER_NAME "Rodland Farms"
+
 // Define the BLE connection
 void ble_app_advertise(void)
 {
@@ -193,7 +194,14 @@ void ble_app_advertise(void)
     const char *device_name;
     memset(&fields, 0, sizeof(fields));
     device_name = ble_svc_gap_device_name(); // Read the BLE device name
-    uint8_t manuf_data[12]; // Ensure the total advertisement data doesn't exceed 31 bytes
+    // Set manufacturer data to the manufacturer name
+    uint8_t manuf_data[32];  // Make sure the size is sufficient for the manufacturer name
+    snprintf((char *)manuf_data, sizeof(manuf_data), "%s", MANUFACTURER_NAME);  // Copy the manufacturer name into manuf_data
+    
+
+    fields.mfg_data = manuf_data;  // Pointer to the manufacturer data
+    fields.mfg_data_len = strlen(MANUFACTURER_NAME);  // Length of manufacturer name
+
     fields.name = (uint8_t *)device_name;
     fields.name_len = strlen(device_name);
     fields.name_is_complete = 1;
@@ -328,7 +336,7 @@ void app_main() {
     read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, &main_struct.credentials_recv);
 
     // Only initialize BLE if credentials are NOT set
-    //if (!main_struct.credentials_recv) {
+    if (!main_struct.credentials_recv) {
         // Initialize NimBLE host stack
         nimble_port_init();  // Step 1: Initialize the host stack
 
@@ -341,9 +349,9 @@ void app_main() {
         // Task entry log 
         ESP_LOGI(TAG, "NimBLE host task has been started!");
 
-    //} else {
-    //    ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
-    //} 
+    } else {
+        ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
+    } 
 
     // Start moisture reading in a separate FreeRTOS task
     //xTaskCreate(monitor, "monitor", 4 * 1024, NULL, 5, NULL);
