@@ -14,8 +14,8 @@
 #define MAX_HOSTNAME_LEN 13
 
 #define RETRIES_COUNT 8
-#define STATIC_SSID   "sableBusiness"   // Set static SSID here
-#define STATIC_PASSWORD "password123"    // Set static password here
+#define STATIC_SSID   "thespot"   // Set static SSID here
+#define STATIC_PASSWORD "Password123"    // Set static password here
 static const char *TAG = "WiFi";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
@@ -28,7 +28,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 {
     static uint8_t retries = RETRIES_COUNT;
     // Declare the hostname variable
-    char hostname[MAX_HOSTNAME_LEN];
+    //char hostname[MAX_HOSTNAME_LEN];
 
     if (event_base == WIFI_EVENT) {
         if (event_id == WIFI_EVENT_STA_START) {
@@ -40,7 +40,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             uint8_t mac[6];
             esp_wifi_get_mac(ESP_IF_WIFI_STA, mac);
 
-            // set hostname to the MAC address without colons
+            // set hostname to the MAC address to a string without colons
             snprintf(main_struct.hostname, MAX_HOSTNAME_LEN, "%02X%02X%02X%02X%02X%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
@@ -55,6 +55,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 ESP_LOGE(TAG, "Wi-Fi connection failed after maximum retries.");
                 xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
                 main_struct.isProvisioned = false;
+                esp_wifi_stop();  // Stop the Wi-Fi driver
+                ESP_LOGI(TAG, "Wi-Fi disabled.");
+                // Trigger BLE advertising if Wi-Fi connection fails
+                ble_app_advertise();  // Start BLE advertising for provisioning
+
                 // Optionally restart the Wi-Fi or device to retry the configuration
                 // esp_restart();
             }
@@ -106,31 +111,41 @@ esp_err_t wifi_connect()
 {
     wifi_config_t wifi_config = {0};
 
-    // Check if STATIC_SSID and STATIC_PASSWORD are set
+    // If STATIC_SSID is defined, use that
     #ifdef STATIC_SSID
-        // Use the static SSID for testing
         strncpy((char *)wifi_config.sta.ssid, STATIC_SSID, sizeof(wifi_config.sta.ssid) - 1);
         ESP_LOGI(TAG, "Using Static SSID: %s", STATIC_SSID);
     #else
-        // If STATIC_SSID is not set, handle accordingly (e.g., use default, or NVS)
-        ESP_LOGI(TAG, "STATIC_SSID is not set, falling back to default.");
+        ESP_LOGI(TAG, "Static SSID not set.");
     #endif
 
+    // If STATIC_PASSWORD is defined, use that
     #ifdef STATIC_PASSWORD
-        // Use the static password for testing
         strncpy((char *)wifi_config.sta.password, STATIC_PASSWORD, sizeof(wifi_config.sta.password) - 1);
         ESP_LOGI(TAG, "Using Static Password: %s", STATIC_PASSWORD);
     #else
-        // Set SSID and password from main_struct (ensure they are valid strings)
-        strncpy((char *)wifi_config.sta.ssid, main_struct.ssid, sizeof(wifi_config.sta.ssid) - 1);
+        ESP_LOGI(TAG, "Static SSID and PASSWORD not set. Checking NVS settings.");
+        // If STATIC_PASSWORD is not defined, fall back to main_struct.password
+        if (strlen(main_struct.password) == 0) {
+            // If password is not set, start BLE advertising for provisioning
+            ESP_LOGI(TAG, "NVS not set, starting BLE advertising for provisioning...");
+            main_struct.isProvisioned = false;
+            esp_wifi_stop();  // Stop the Wi-Fi driver
+            ESP_LOGI(TAG, "Wi-Fi disabled.");
+            ble_app_advertise();  // Start BLE advertising for provisioning
+            return ESP_ERR_WIFI_NOT_CONNECT;  // Return error code to indicate failure to connect
+        }
         strncpy((char *)wifi_config.sta.password, main_struct.password, sizeof(wifi_config.sta.password) - 1);
+        strncpy((char *)wifi_config.sta.ssid, main_struct.ssid, sizeof(wifi_config.sta.ssid) - 1);
+        ESP_LOGI(TAG, "Using Password from main_struct.");
     #endif
 
     ESP_LOGI(TAG, "Connecting to Wi-Fi SSID: %s", wifi_config.sta.ssid);
 
-    // Set Wi-Fi config and start connection
+    // Set the Wi-Fi configuration and start the connection attempt
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    
+
     // Start the connection attempt
     return esp_wifi_connect();
 }
+

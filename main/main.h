@@ -1,5 +1,6 @@
 #ifndef MAIN_H_
 #define MAIN_H_
+#include <stdint.h>
 
 typedef struct
 {
@@ -13,11 +14,10 @@ typedef struct
     char hostname[13];
 
     float battery_data;
-
-    
 } main_struct_t;
 
 extern main_struct_t main_struct;
-
+// Declaration of ble_app_advertise, which is defined in main.c
+void ble_app_advertise(void);
 
 #endif
