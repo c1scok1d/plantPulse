@@ -234,21 +234,16 @@ void monitor()
         ESP_LOGE("I2C", "I2C initialization failed");
         return;
     }
+    // Read battery and moisture data
+    float battery = getBattery(err);
+    int moisture = readMoisture();
 
-    //while (count < 30){
-        ESP_LOGI(TAG, "%d", count);
+    // Upload data
+    uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
 
-        // Read battery and moisture data
-        float battery = getBattery(err);
-        int moisture = readMoisture();
-
-        // Upload data
-        uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
-
-        //count++;
-        vTaskDelay(pdMS_TO_TICKS(5000));  // Delay for 5 seconds
-    //}
-
-    // Send battery data and enter deep sleep
+    // Delay for 5 seconds
+    vTaskDelay(pdMS_TO_TICKS(5000));  
+    
+    // Enter deep sleep
     enter_deep_sleep();
 }
