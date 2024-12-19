@@ -115,9 +115,11 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         main_struct.credentials_recv = true;
 
         save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.credentials_recv);
-        printf("Password saved to %s\n", main_struct.password);
-        printf("ssid to %s\n", main_struct.ssid);
-        printf("wvalue %d\n", main_struct.credentials_recv);
+        printf("Password saved as: %s\n", main_struct.password);
+        printf("SSID saved as: %s\n", main_struct.ssid);
+        printf("Name saved as: %s\n", main_struct.password);
+        printf("Location saved as: %s\n", main_struct.ssid);
+        printf("Is Provisioned: %d\n", main_struct.credentials_recv);
     }
 
     return 0;
@@ -188,11 +190,11 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 
         break;
     case BLE_GAP_EVENT_DISCONNECT:
-
+        ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "CONNECTED!" : "DISCONNECTED!");
         break;
     // Advertise again after completion of the event/advertisement
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGI("GAP", "BLE GAP EVENT");
+        ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
         ble_advert();
 
         break;
@@ -202,37 +204,67 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-#define MANUFACTURER_NAME "Rodland Farms"
+static uint8_t advertising_data[] = {
+    2,                 // Length of the data (flags)
+    0x01,              // Type: Flags
+    0x02 | 0x06,       // Flags: LE General Discoverable | LE BR/EDR Not Supported
+};
 
-// Define the BLE connection
 void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
-    const char *device_name;
     memset(&fields, 0, sizeof(fields));
-    device_name = ble_svc_gap_device_name(); // Read the BLE device name
+    const char *device_name;
+    const char *company_identifier= "Rodland Farms";  
+    device_name = ble_svc_gap_device_name(); // Read the BLE device name; 
 
-    // Set the device name
-    fields.name = (uint8_t *)device_name;
-    fields.name_len = strlen(device_name);
-    fields.name_is_complete = 1;
+    // Prepare advertising data
+    uint8_t advertising_data[31];  // Maximum size for BLE advertising data is 31 bytes
+    uint8_t len = 0;
 
-    // Set the service UUID in the advertisement data
+    // Set the flags (LE General Discoverable | LE BR/EDR Not Supported)
+    advertising_data[len++] = 2;                 // Length of flags
+    advertising_data[len++] = 0x01;              // Type: Flags
+    advertising_data[len++] = 0x02 | 0x06;       // Flags: LE General Discoverable | LE BR/EDR Not Supported
+
+    // Add device name to the advertising data
+    uint8_t name_len = strlen(device_name) + 1;  // +1 for the 0x09 type byte
+    advertising_data[len++] = name_len;          // Length of the name
+    advertising_data[len++] = 0x09;              // Type: Complete Local Name
+
+    // Copy the device name into the advertising data
+    memcpy(&advertising_data[len], device_name, strlen(device_name));
+    len += strlen(device_name);
+    
+    // Add the company identifier
+    memcpy(&advertising_data[len], company_identifier, sizeof(company_identifier));
+    len += sizeof(company_identifier);
+
+    // Set the advertisement fields
     fields.uuids16 = (uint8_t[]){SSID_CHR_UUID, PASS_CHR_UUID, NAME_CHR_UUID, LOCATION_CHR_UUID};  // Include your service UUIDs here
     fields.num_uuids16 = 4;  // Number of 16-bit UUIDs being advertised
 
     // Set the advertisement fields
     ble_gap_adv_set_fields(&fields);
 
+    // Set the advertising data
+    int rc = ble_gap_adv_set_data(advertising_data, len);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Failed to set advertising data, error code %d", rc);
+        return;
+    }
+
     // Define advertisement parameters
     struct ble_gap_adv_params adv_params;
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  // Connectable
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; // Discoverable
-    ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);
+
+    // Start advertising
+    rc = ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Failed to start advertising, error code %d", rc);
+    }
 }
-
-
-
 
 static void nimble_host_task(void *param)
 {
@@ -373,15 +405,20 @@ void app_main() {
     nvs_init();
     read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, &main_struct.credentials_recv);
 
+    ESP_LOGI("NVS", "SSID: %s", main_struct.ssid);
+    ESP_LOGI("NVS", "Password: %s", main_struct.password);
+    ESP_LOGI("NVS", "Name: %s", main_struct.name);
+    ESP_LOGI("NVS", "Location: %s", main_struct.location);
+    ESP_LOGI("NVS", "Credentials Received: %d", main_struct.credentials_recv);
+
     // Only initialize BLE if credentials are NOT set
     if (!main_struct.credentials_recv) {
         ble_advert();
     } 
     else {
     ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
-    disable_ble();  // Stop BLE advertising
     xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
-    xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
+    //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
 }
 
 }
