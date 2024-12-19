@@ -26,7 +26,7 @@
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
 #define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
 #define PROV_STATUS_UUID 0xDEAD
-#define MANUFACTURER_NAME "Rodland Farms"
+//#define MANUFACTURER_NAME "Rodland Farms"
 
 
 
@@ -156,56 +156,79 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
 };
 
 // BLE event handling
+#define BLE_CONN_MAX_RETRIES 3
+
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
+    static int ble_conn_retries = 0;
+    char *TAG = "BLE GAP EVENT";
+
     switch (event->type)
     {
-    // Advertise if connected
     case BLE_GAP_EVENT_CONNECT:
+        ESP_LOGI(TAG, "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
 
-        ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
-        if (event->connect.status == 0)
+        if (event->connect.status == 0) {
+            // Connection successful
             g_conn_handle = event->connect.conn_handle;
-        else if (event->connect.status != 0)
-            ble_app_advertise();
-
+            ble_conn_retries = 0;  // Reset retries after a successful connection
+        } else if (event->connect.status != 0) {
+            // Connection failed
+            if (ble_conn_retries < BLE_CONN_MAX_RETRIES) {
+                ESP_LOGW(TAG, "Connection failed, retrying (%d/%d)", ble_conn_retries + 1, BLE_CONN_MAX_RETRIES);
+                ble_conn_retries++;
+                ble_app_advertise();  // Retry advertising
+            } else {
+                ESP_LOGE(TAG, "BLE connection failed after %d retries.", BLE_CONN_MAX_RETRIES);
+                // Optionally disable BLE or handle further steps
+            }
+        }
         break;
+
     case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "BLE GAP EVENT DISCONNECT");
+        // Handle disconnection (could include cleanup or retry advertising)
+        break;
 
-        break;
-    // Advertise again after completion of the event/advertisement
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGI("GAP", "BLE GAP EVENT");
-        ble_app_advertise();
+        ESP_LOGI(TAG, "BLE GAP EVENT ADV COMPLETE");
+        ble_app_advertise();  // Advertise again if advertising is complete
         break;
+
     default:
         break;
     }
+
     return 0;
 }
 
-#define MANUFACTURER_NAME "Rodland Farms"
+
+//#define MANUFACTURER_NAME "Rodland Farms"
 
 // Define the BLE connection
 void ble_app_advertise(void)
 {
+    char *TAG = "BLE_ADVERTISE";
     // GAP - device name definition
     struct ble_hs_adv_fields fields;
     const char *device_name;
     memset(&fields, 0, sizeof(fields));
+
     device_name = ble_svc_gap_device_name(); // Read the BLE device name
     // Set manufacturer data to the manufacturer name
-    uint8_t manuf_data[32];  // Make sure the size is sufficient for the manufacturer name
-    snprintf((char *)manuf_data, sizeof(manuf_data), "%s", MANUFACTURER_NAME);  // Copy the manufacturer name into manuf_data
+    //uint8_t manuf_data[32];  // Make sure the size is sufficient for the manufacturer name
+    //snprintf((char *)manuf_data, sizeof(manuf_data), "%s", MANUFACTURER_NAME);  // Copy the manufacturer name into manuf_data
     
 
-    fields.mfg_data = manuf_data;  // Pointer to the manufacturer data
-    fields.mfg_data_len = strlen(MANUFACTURER_NAME);  // Length of manufacturer name
+    //fields.mfg_data = manuf_data;  // Pointer to the manufacturer data
+    //fields.mfg_data_len = strlen((char *)manuf_data);  // Length of manufacturer name
 
     fields.name = (uint8_t *)device_name;
     fields.name_len = strlen(device_name);
     fields.name_is_complete = 1;
     ble_gap_adv_set_fields(&fields);
+
+    //ESP_LOGI(TAG, "device name: %s, manufacterer: %s", device_name, manuf_data);
 
     // GAP - device connectivity definition
     struct ble_gap_adv_params adv_params;
@@ -311,10 +334,11 @@ void ble_app_on_sync(void)
 
     // Create final device name with "PlantPulse-" prefix and the last 4 bytes of the MAC address
     char final_device_name[50];  // Ensure enough space for "PlantPulse-" + MAC address
-    snprintf(final_device_name, sizeof(final_device_name), "PlantPulse-%s", device_name);
+    snprintf(final_device_name, sizeof(final_device_name), "PlantPulse %s", device_name);
 
     // Set the BLE device name
     ble_svc_gap_device_name_set(final_device_name);  // Set the device name
+    //ble_svc_gap_device_name_set("pLANTpULSE");  // Set the device name
     
     ESP_LOGI(TAG, "Device BLE name set to: %s", final_device_name);
 
@@ -346,8 +370,6 @@ void app_main() {
 
         // Start NimBLE host task thread and return 
         xTaskCreate(nimble_host_task, "PlantPulse", 4 * 1024, NULL, 5, NULL);
-        // Task entry log 
-        ESP_LOGI(TAG, "NimBLE host task has been started!");
 
     } else {
         ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");

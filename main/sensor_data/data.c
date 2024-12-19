@@ -123,7 +123,8 @@ int readMoisture() {
     reading = adc1_get_raw(ADC1_CHANNEL_4);  // Get the raw ADC value
 
     // Map the ADC raw value to a percentage (0-100)
-    int moisture = map(reading, 4095, 0, 0, 100);
+    //int moisture = map(reading, 4095, 0, 0, 100);
+    int moisture = map(reading, 3530, 1830, 0, 100);
 
     // Log the raw ADC reading and calculated moisture percentage
     ESP_LOGI(TAG, "Raw ADC Reading: %d, Moisture: %d%%", reading, moisture);
