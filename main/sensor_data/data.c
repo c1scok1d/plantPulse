@@ -11,6 +11,8 @@
 #include "esp_sleep.h"
 #include "driver/i2c.h"
 #include "rest_methods.h"
+#include "time.h"      // For time manipulation (including time-related functions like local time)
+#include "sntp.h" 
 
 static const char *TAG = "DATA";
 #define I2C_MASTER_SDA_IO    16      // GPI016 is SDA
@@ -123,8 +125,7 @@ int readMoisture() {
     reading = adc1_get_raw(ADC1_CHANNEL_4);  // Get the raw ADC value
 
     // Map the ADC raw value to a percentage (0-100)
-    //int moisture = map(reading, 4095, 0, 0, 100);
-    int moisture = map(reading, 3530, 1830, 0, 100);
+    int moisture = map(reading, 4095, 0, 0, 100);
 
     // Log the raw ADC reading and calculated moisture percentage
     ESP_LOGI(TAG, "Raw ADC Reading: %d, Moisture: %d%%", reading, moisture);
@@ -240,6 +241,48 @@ void monitor()
 {
     int count = 0;
     esp_err_t err = i2c_master_init();
+
+    if (err != ESP_OK) {
+        ESP_LOGE("I2C", "I2C initialization failed");
+        return;
+    }
+
+    while (count < 30){
+        ESP_LOGI(TAG, "%d", count);
+
+        // Read battery and moisture data
+        float battery = getBattery(err);
+        int moisture = readMoisture();
+
+        // Upload data
+        uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
+
+        count++;
+        vTaskDelay(pdMS_TO_TICKS(5000));  // Delay for 5 seconds
+    }
+
+    // Send battery data and enter deep sleep
+    enter_deep_sleep();
+}
+
+/*
+void monitor()
+{
+    int count = 0;
+    esp_err_t err = i2c_master_init();
+    configTime(0, "pool.ntp.org", "0.pool.ntp.org", "1.pool.ntp.org"); // Example NTP server pool
+    setenv("TZ", "America/Chicago", 1); // Set your desired timezone [2, 11]
+    sntp_initialized = sntp_start(); // Start NTP client [1, 9, 11]
+
+    struct tm timeinfo;
+
+    if (!getLocalTime(&timeinfo)) {
+        Serial.println();
+        ESP_LOGI(TAG, "Failed to obtain time");
+    } else {
+        ESP_LOGI(TAG, "%s", asctime(&timeinfo));
+    }
+
     if (err != ESP_OK) {
         ESP_LOGE("I2C", "I2C initialization failed");
         return;
@@ -259,4 +302,4 @@ void monitor()
 
     //send_battery_data(main_struct.battery_data);
     enter_deep_sleep();
-}
+}*/

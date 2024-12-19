@@ -26,7 +26,7 @@
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
 #define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
 #define PROV_STATUS_UUID 0xDEAD
-//#define MANUFACTURER_NAME "Rodland Farms"
+#define MANUFACTURER_NAME "Rodland Farms"
 
 
 
@@ -91,14 +91,14 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         break;
 
     case NAME_CHR_UUID:
-        ssid_pswd_flag[1] = true;
+        ssid_pswd_flag[2] = true;
         strncpy(main_struct.name, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.name[ctxt->om->om_len] = '\0';
         ESP_LOGI(TAG, "Received Device Name: %s", main_struct.name);
         break;
     
     case LOCATION_CHR_UUID:
-        ssid_pswd_flag[1] = true;
+        ssid_pswd_flag[3] = true;
         strncpy(main_struct.location, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.location[ctxt->om->om_len] = '\0';
         ESP_LOGI(TAG, "Received Device Location: %s", main_struct.location);
@@ -135,100 +135,88 @@ static int device_read(uint16_t con_handle, uint16_t attr_handle, struct ble_gat
 
 // Array of pointers to other service definitions
 static const struct ble_gatt_svc_def gatt_svcs[] = {
-    {// service
-     .type = BLE_GATT_SVC_TYPE_PRIMARY,
-     .uuid = BLE_UUID16_DECLARE(0x180), // Define UUID for device type
-     .characteristics = (struct ble_gatt_chr_def[]){
-         {.uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // SSID characteristic
-          .flags = BLE_GATT_CHR_F_WRITE,
-          .access_cb = device_write},
-         {.uuid = BLE_UUID16_DECLARE(PASS_CHR_UUID), // Password characteristic
-          .flags = BLE_GATT_CHR_F_WRITE,
-          .access_cb = device_write},
-         {.uuid = BLE_UUID16_DECLARE(NAME_CHR_UUID), // ensor Name characteristic
-          .flags = BLE_GATT_CHR_F_WRITE,
-          .access_cb = device_write},  // Write callback function for sensorName
-         {.uuid = BLE_UUID16_DECLARE(LOCATION_CHR_UUID), // Sensor Location characteristic
-          .flags = BLE_GATT_CHR_F_WRITE,
-          .access_cb = device_write},  // Write callback function for sensorLocation
-         {0}}},
-    {0} // No more service
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,  // Primary service type
+        .uuid = BLE_UUID16_DECLARE(0x1800), // Service UUID (Custom UUID for device type)
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // SSID characteristic
+                .flags = BLE_GATT_CHR_F_WRITE, // Write access only
+                .access_cb = device_write      // Write callback
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(PASS_CHR_UUID), // Password characteristic
+                .flags = BLE_GATT_CHR_F_WRITE, // Write access only
+                .access_cb = device_write      // Write callback
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(NAME_CHR_UUID), // Sensor Name characteristic
+                .flags = BLE_GATT_CHR_F_WRITE, // Write access only
+                .access_cb = device_write      // Write callback
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(LOCATION_CHR_UUID), // Sensor Location characteristic
+                .flags = BLE_GATT_CHR_F_WRITE, // Write access only
+                .access_cb = device_write      // Write callback
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(PROV_STATUS_UUID), // Define UUID for reading
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .access_cb = device_read,
+                .val_handle = &prov_status_attr_handle
+            },
+            {0} // Terminating the characteristics array
+        }
+    },
+    {0} // Terminating the services array
 };
 
-// BLE event handling
-#define BLE_CONN_MAX_RETRIES 3
 
+// BLE event handling
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
-    static int ble_conn_retries = 0;
-    char *TAG = "BLE GAP EVENT";
-
     switch (event->type)
     {
+    // Advertise if connected
     case BLE_GAP_EVENT_CONNECT:
-        ESP_LOGI(TAG, "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
 
-        if (event->connect.status == 0) {
-            // Connection successful
+        ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
+        if (event->connect.status == 0)
             g_conn_handle = event->connect.conn_handle;
-            ble_conn_retries = 0;  // Reset retries after a successful connection
-        } else if (event->connect.status != 0) {
-            // Connection failed
-            if (ble_conn_retries < BLE_CONN_MAX_RETRIES) {
-                ESP_LOGW(TAG, "Connection failed, retrying (%d/%d)", ble_conn_retries + 1, BLE_CONN_MAX_RETRIES);
-                ble_conn_retries++;
-                ble_app_advertise();  // Retry advertising
-            } else {
-                ESP_LOGE(TAG, "BLE connection failed after %d retries.", BLE_CONN_MAX_RETRIES);
-                // Optionally disable BLE or handle further steps
-            }
-        }
-        break;
+        else if (event->connect.status != 0)
+            ble_app_advertise();
 
+        break;
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI(TAG, "BLE GAP EVENT DISCONNECT");
-        // Handle disconnection (could include cleanup or retry advertising)
-        break;
 
+        break;
+    // Advertise again after completion of the event/advertisement
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGI(TAG, "BLE GAP EVENT ADV COMPLETE");
-        ble_app_advertise();  // Advertise again if advertising is complete
-        break;
+        ESP_LOGI("GAP", "BLE GAP EVENT");
+        ble_app_advertise();
 
+        break;
     default:
         break;
     }
-
     return 0;
 }
 
-
-//#define MANUFACTURER_NAME "Rodland Farms"
+#define MANUFACTURER_NAME "Rodland Farms"
 
 // Define the BLE connection
 void ble_app_advertise(void)
 {
-    char *TAG = "BLE_ADVERTISE";
     // GAP - device name definition
     struct ble_hs_adv_fields fields;
     const char *device_name;
     memset(&fields, 0, sizeof(fields));
-
     device_name = ble_svc_gap_device_name(); // Read the BLE device name
-    // Set manufacturer data to the manufacturer name
-    //uint8_t manuf_data[32];  // Make sure the size is sufficient for the manufacturer name
-    //snprintf((char *)manuf_data, sizeof(manuf_data), "%s", MANUFACTURER_NAME);  // Copy the manufacturer name into manuf_data
-    
-
-    //fields.mfg_data = manuf_data;  // Pointer to the manufacturer data
-    //fields.mfg_data_len = strlen((char *)manuf_data);  // Length of manufacturer name
 
     fields.name = (uint8_t *)device_name;
     fields.name_len = strlen(device_name);
     fields.name_is_complete = 1;
     ble_gap_adv_set_fields(&fields);
-
-    //ESP_LOGI(TAG, "device name: %s, manufacterer: %s", device_name, manuf_data);
 
     // GAP - device connectivity definition
     struct ble_gap_adv_params adv_params;
@@ -334,11 +322,10 @@ void ble_app_on_sync(void)
 
     // Create final device name with "PlantPulse-" prefix and the last 4 bytes of the MAC address
     char final_device_name[50];  // Ensure enough space for "PlantPulse-" + MAC address
-    snprintf(final_device_name, sizeof(final_device_name), "PlantPulse %s", device_name);
+    snprintf(final_device_name, sizeof(final_device_name), "PlantPulse-%s", device_name);
 
     // Set the BLE device name
     ble_svc_gap_device_name_set(final_device_name);  // Set the device name
-    //ble_svc_gap_device_name_set("pLANTpULSE");  // Set the device name
     
     ESP_LOGI(TAG, "Device BLE name set to: %s", final_device_name);
 
@@ -347,6 +334,7 @@ void ble_app_on_sync(void)
     ble_svc_gatt_init();                       // Initialize NimBLE GATT service
     ble_gatts_count_cfg(gatt_svcs);            // Initialize NimBLE config GATT services
     ble_gatts_add_svcs(gatt_svcs);             // Add GATT services
+    ble_app_advertise();
 }
 
 // Main application entry point
@@ -362,23 +350,25 @@ void app_main() {
     // Only initialize BLE if credentials are NOT set
     if (!main_struct.credentials_recv) {
         // Initialize NimBLE host stack
-        nimble_port_init();  // Step 1: Initialize the host stack
-
-        // Set up the sync callback (this will be used later in sync events)
-        ble_hs_cfg.sync_cb = ble_app_on_sync;  // Step 2: Set the sync callback function
-
+        nimble_port_init();                        // 3 - Initialize the host stack
+        //ble_svc_gap_device_name_set("BLE-Server"); // 4 - Initialize NimBLE configuration - server name
+        ble_svc_gap_init();                        // 4 - Initialize NimBLE configuration - gap service
+        ble_svc_gatt_init();                       // 4 - Initialize NimBLE configuration - gatt service
+        ble_gatts_count_cfg(gatt_svcs);            // 4 - Initialize NimBLE configuration - config gatt services
+        ble_gatts_add_svcs(gatt_svcs);             // 4 - Initialize NimBLE configuration - queues gatt services.
+        ble_hs_cfg.sync_cb = ble_app_on_sync;      // 5 - Initialize application
 
         // Start NimBLE host task thread and return 
         xTaskCreate(nimble_host_task, "PlantPulse", 4 * 1024, NULL, 5, NULL);
+        // Task entry log 
+        ESP_LOGI(TAG, "NimBLE host task has been started!");
 
     } else {
         ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
-    } 
+        // Check Wifi Credentials 
+        xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
 
-    // Start moisture reading in a separate FreeRTOS task
-    //xTaskCreate(monitor, "monitor", 4 * 1024, NULL, 5, NULL);
-    // Check Wifi Credentials 
-    xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
+        xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
+    }
 
-    //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
 }

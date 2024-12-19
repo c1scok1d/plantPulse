@@ -14,8 +14,8 @@
 #define MAX_HOSTNAME_LEN 13
 
 #define RETRIES_COUNT 8
-#define STATIC_SSID   "thespot"   // Set static SSID here
-#define STATIC_PASSWORD "Password123"    // Set static password here
+//#define STATIC_SSID   "thespot"   // Set static SSID here
+//#define STATIC_PASSWORD "Password123"    // Set static password here
 static const char *TAG = "WiFi";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
@@ -57,8 +57,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 main_struct.isProvisioned = false;
                 esp_wifi_stop();  // Stop the Wi-Fi driver
                 ESP_LOGI(TAG, "Wi-Fi disabled.");
-                // Trigger BLE advertising if Wi-Fi connection fails
-                ble_app_advertise();  // Start BLE advertising for provisioning
+                // Delay to allow time for error logging and BLE advertisement setup
+                vTaskDelay(1000);
+
+                // Trigger BLE advertising for provisioning
+                ESP_LOGI(TAG, "Starting BLE advertising for provisioning...");
+                ble_app_advertise();
 
                 // Optionally restart the Wi-Fi or device to retry the configuration
                 // esp_restart();
@@ -111,20 +115,13 @@ esp_err_t wifi_connect()
 {
     wifi_config_t wifi_config = {0};
 
-    // If STATIC_SSID is defined, use that
-    #ifdef STATIC_SSID
-        strncpy((char *)wifi_config.sta.ssid, STATIC_SSID, sizeof(wifi_config.sta.ssid) - 1);
-        ESP_LOGI(TAG, "Using Static SSID: %s", STATIC_SSID);
-    #else
-        ESP_LOGI(TAG, "Static SSID not set.");
-    #endif
 
     // If STATIC_PASSWORD is defined, use that
-    #ifdef STATIC_PASSWORD
+    #if STATIC_PASSWORD
         strncpy((char *)wifi_config.sta.password, STATIC_PASSWORD, sizeof(wifi_config.sta.password) - 1);
         ESP_LOGI(TAG, "Using Static Password: %s", STATIC_PASSWORD);
     #else
-        ESP_LOGI(TAG, "Static SSID and PASSWORD not set. Checking NVS settings.");
+        ESP_LOGI(TAG, "Static PASSWORD not set. Checking NVS settings.");
         // If STATIC_PASSWORD is not defined, fall back to main_struct.password
         if (strlen(main_struct.password) == 0) {
             // If password is not set, start BLE advertising for provisioning
@@ -146,6 +143,6 @@ esp_err_t wifi_connect()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 
     // Start the connection attempt
-    return esp_wifi_connect();
+    return ESP_OK;
 }
 

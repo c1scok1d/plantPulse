@@ -17,7 +17,7 @@ typedef struct
 } main_struct_t;
 
 extern main_struct_t main_struct;
-// Declaration of ble_app_advertise, which is defined in main.c
 void ble_app_advertise(void);
+
 
 #endif
