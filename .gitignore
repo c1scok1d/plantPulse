@@ -4,3 +4,4 @@ build/*
 sdkconfig
 main/.DS_Store
 sdkconfig
+sdkconfig

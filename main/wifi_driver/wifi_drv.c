@@ -7,7 +7,7 @@
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "freertos/event_groups.h"
-#include "../main.h"
+#include "main.h"
 #include "data.h"
 
 // Define the maximum size for hostname (12 characters for MAC + 1 for null terminator)

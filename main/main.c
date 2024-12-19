@@ -204,12 +204,6 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-static uint8_t advertising_data[] = {
-    2,                 // Length of the data (flags)
-    0x01,              // Type: Flags
-    0x02 | 0x06,       // Flags: LE General Discoverable | LE BR/EDR Not Supported
-};
-
 void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
@@ -414,8 +408,7 @@ void app_main() {
     // Only initialize BLE if credentials are NOT set
     if (!main_struct.credentials_recv) {
         ble_advert();
-    } 
-    else {
+    } else {
     ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
     xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
     //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);

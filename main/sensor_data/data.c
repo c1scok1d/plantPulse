@@ -4,8 +4,8 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "../main.h"
-#include "http.h"
+#include "main.h"
+//#include "http.h"
 #include "cJSON.h"
 #include <string.h>
 #include "esp_sleep.h"
@@ -136,92 +136,80 @@ int readMoisture() {
     //vTaskDelete(NULL);  // Delete task when done
 }
 
-
-// Replace String and std::string with const char*
-void uploadReadings(int moisture, float battery, const char* hostname, const char* sensorName, const char* sensorLocation) {
-    static const char *TAG = "UploadReadings";  // Logging tag
+// Function to send data to the server in a FreeRTOS task
+void uploadReadingsTask(void *param)
+{
+    // Cast the parameter back to the expected data structure
+    typedef struct {
+        int moisture;
+        float battery;
+        const char* hostname;
+        const char* sensorName;
+        const char* sensorLocation;
+    } upload_data_t;
+    
+    upload_data_t *data = (upload_data_t *)param;
 
     const char *serverName = "http://athome.rodlandfarms.com";
-    const char *server_path = "/api/esp/data";
+    const char *server_path = "/api/esp/data?";
     const char* apiKey = "gwGWZKjADUeHe1f06muhnhdt38pmVwBaNuiyL18WvLHLMeFUZYcqOZqsgvyl";
 
-    // Allocate enough space to store the full URI
-    size_t server_uri_len = strlen(serverName) + strlen(server_path) + 1; // +1 for the null-terminator
-    char* server_uri = (char*) malloc(server_uri_len);
-    if (!server_uri) {
-        // Log the raw ADC reading and calculated moisture percentage
-        ESP_LOGI(TAG, "Memory allocation failed for server URI\n");
-        //return NULL;  // Return NULL if memory allocation fails
-    }
+    // Construct the server URI
+    char server_uri[256];
+    snprintf(server_uri, sizeof(server_uri), "%s%s", serverName, server_path);
 
-    snprintf(server_uri, server_uri_len, "%s%s", serverName, server_path);  // Concatenate server name and path
-
-    // Prepare the HTTP POST request data using C-style string concatenation
-    // Allocate enough space for the HTTP request data
-    size_t httpRequestData_len = strlen("api_token=") + strlen(apiKey) +
-                                 strlen("&hostname=") + strlen(hostname) +
-                                 strlen("&sensor=") + strlen(sensorName) +
-                                 strlen("&location=") + strlen(sensorLocation) +
-                                 strlen("&moisture=") + 12 +   // Enough space for integer + null terminator
-                                 strlen("&batt=") + 20;         // Enough space for float + null terminator
-    char* httpRequestData = (char*) malloc(httpRequestData_len);
-    if (!httpRequestData) {
-        ESP_LOGI(TAG, "Memory allocation failed for HTTP request data\n");
-        free(server_uri);  // Free server_uri before returning
-        //return NULL;  // Return NULL if memory allocation fails
-    }
-
-    snprintf(httpRequestData, httpRequestData_len,
+    // Construct the HTTP request data
+    char httpRequestData[512];
+    snprintf(httpRequestData, sizeof(httpRequestData),
              "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f",
-             apiKey, hostname, sensorName, sensorLocation, moisture, battery);
+             apiKey, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery);
 
-    // Log the raw ADC reading and calculated moisture percentage
-    ESP_LOGI(TAG, "%s\n\n", httpRequestData);
+    // Send the POST request
+    int httpResponseCode = POST(server_uri, httpRequestData);
 
-    // Send HTTP POST request
-    //int httpResponseCode = POST(server_uri, httpRequestData);
-
-    // Free allocated memory
-    free(server_uri);
-    free(httpRequestData);
-
-    // Return the request data (if needed) or a success message
-    // In C, returning the request data might not be ideal, so you could return a status code if needed.
-    // Return the request data for debugging purposes
-    //return httpRequestData;
-}
-/*
-esp_err_t send_battery_data(float battery_level, int moisture)
-{
-    // Create a new JSON object
-    cJSON *json_data = cJSON_CreateObject();
-
-    // Add battery data to JSON object
-    cJSON_AddNumberToObject(json_data, "battery", battery_level); // Add battery level
-    // Add moisture data to JSON object
-    cJSON_AddNumberToObject(json_data, "moisture", moisture); // Add battery level
-
-
-    // Convert the JSON object to a string
-    char *json_string = cJSON_Print(json_data);
-    ESP_LOGI(TAG, "JSON string %s", json_string);
-
-    if (json_string == NULL)
-    {
-        ESP_LOGE(TAG, "Failed to print JSON");
-        cJSON_Delete(json_data);
-        return ESP_FAIL;
+    // Check if the request was successful
+    if (httpResponseCode == 200) {
+        ESP_LOGI("UploadReadings", "POST request successful. HTTP response code: %d", httpResponseCode);
+    } else {
+        ESP_LOGE("UploadReadings", "POST request failed. HTTP response code: %d", httpResponseCode);
     }
 
-    // Call the HTTP POST function and pass the JSON string
-    esp_err_t err = http_post(json_string, strlen(json_string));
+    // Free the allocated memory for task parameter
+    free(data);
 
-    // Clean up the JSON object
-    cJSON_Delete(json_data);
-    free(json_string); // Free the allocated memory for the JSON string
+    // Delete the task once done
+    vTaskDelete(NULL);
+}
 
-    return err;
-} */
+void uploadReadings(int moisture, float battery, const char* hostname, const char* sensorName, const char* sensorLocation)
+{
+    // Create a structure to pass the data to the task
+    typedef struct {
+        int moisture;
+        float battery;
+        const char* hostname;
+        const char* sensorName;
+        const char* sensorLocation;
+    } upload_data_t;
+
+    // Allocate memory for the data structure
+    upload_data_t *data = (upload_data_t *)malloc(sizeof(upload_data_t));
+    if (data == NULL) {
+        ESP_LOGE("UploadReadings", "Failed to allocate memory for data");
+        return;
+    }
+
+    // Fill the structure with the data
+    data->moisture = moisture;
+    data->battery = battery;
+    data->hostname = hostname;
+    data->sensorName = sensorName;
+    data->sensorLocation = sensorLocation;
+
+    // Create a FreeRTOS task to upload the readings
+    xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
+}
+
 
 void enter_deep_sleep()
 {
@@ -239,7 +227,7 @@ void enter_deep_sleep()
 
 void monitor()
 {
-    int count = 0;
+    //int count = 0;
     esp_err_t err = i2c_master_init();
 
     if (err != ESP_OK) {
@@ -247,7 +235,7 @@ void monitor()
         return;
     }
 
-    while (count < 30){
+    //while (count < 30){
         ESP_LOGI(TAG, "%d", count);
 
         // Read battery and moisture data
@@ -257,49 +245,10 @@ void monitor()
         // Upload data
         uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
 
-        count++;
+        //count++;
         vTaskDelay(pdMS_TO_TICKS(5000));  // Delay for 5 seconds
-    }
+    //}
 
     // Send battery data and enter deep sleep
     enter_deep_sleep();
 }
-
-/*
-void monitor()
-{
-    int count = 0;
-    esp_err_t err = i2c_master_init();
-    configTime(0, "pool.ntp.org", "0.pool.ntp.org", "1.pool.ntp.org"); // Example NTP server pool
-    setenv("TZ", "America/Chicago", 1); // Set your desired timezone [2, 11]
-    sntp_initialized = sntp_start(); // Start NTP client [1, 9, 11]
-
-    struct tm timeinfo;
-
-    if (!getLocalTime(&timeinfo)) {
-        Serial.println();
-        ESP_LOGI(TAG, "Failed to obtain time");
-    } else {
-        ESP_LOGI(TAG, "%s", asctime(&timeinfo));
-    }
-
-    if (err != ESP_OK) {
-        ESP_LOGE("I2C", "I2C initialization failed");
-        return;
-    }
-
-    while (count < 30){
-        ESP_LOGI(TAG, "%d", count);
-        float battery = getBattery(err);
-        int moisture = readMoisture();
-        
-
-        uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
-        count ++;
-        vTaskDelay(pdMS_TO_TICKS(5000));  // Delay for 5 seconds
-
-    }
-
-    //send_battery_data(main_struct.battery_data);
-    enter_deep_sleep();
-}*/

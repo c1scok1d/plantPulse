@@ -19,6 +19,7 @@
 
 esp_err_t _http_event_handler_post(esp_http_client_event_t *evt)
 {
+    static char *TAG = "HTTP";
     static char *output_buffer; // Buffer to store response of http request from event handler
     static int output_len;      // Stores number of bytes read
     switch (evt->event_id)
@@ -26,10 +27,14 @@ esp_err_t _http_event_handler_post(esp_http_client_event_t *evt)
     case HTTP_EVENT_ERROR:
         break;
     case HTTP_EVENT_ON_CONNECTED:
+        ESP_LOGI(TAG, "Connected");
         break;
     case HTTP_EVENT_HEADER_SENT:
+        ESP_LOGI(TAG, "Header Sent");
         break;
     case HTTP_EVENT_ON_HEADER:
+        // This is where the header name and value are received
+        ESP_LOGI(TAG, "Received header: %s: %s", evt->header_key, evt->header_value);
         break;
     case HTTP_EVENT_ON_DATA:
         if (!esp_http_client_is_chunked_response(evt->client))
@@ -65,14 +70,24 @@ esp_err_t _http_event_handler_post(esp_http_client_event_t *evt)
         break;
     case HTTP_EVENT_DISCONNECTED:
         break;
+    case HTTP_EVENT_REDIRECT:  // Add the missing case
+        // Use esp_http_client_get_status_code to get the status code for the redirect event
+        int status_code = esp_http_client_get_status_code(evt->client);
+        ESP_LOGI(TAG, "Redirect event received, status code: %d", status_code);
+        break;
     }
     return ESP_OK;
 }
 
+// Ensure no other blocking operations occur before sending HTTP request
 int POST(const char* server_uri, const char* to_send)
 {
-    printf("Sending POST request to: %s\n", server_uri);
-    printf("Data: %s\n", to_send);
+    const char *TAG = "POST";
+    // Make sure that any prior locks or mutexes are released before sending the request
+    //printf("Sending POST request to: %s\n", server_uri);
+    //printf("post: %s\n", to_send);
+    ESP_LOGI(TAG, "Sending POST request to: %s\n", server_uri);
+    ESP_LOGI(TAG, "Data to send: %s\n", to_send);
 
     char local_response_buffer_post[MAX_HTTP_OUTPUT_BUFFER_POST] = {0};
 
@@ -87,6 +102,7 @@ int POST(const char* server_uri, const char* to_send)
 
     http_client_post = esp_http_client_init(&config);
 
+    // Ensure no mutex is held before performing this
     esp_http_client_set_url(http_client_post, server_uri);
     esp_http_client_set_method(http_client_post, HTTP_METHOD_POST);
     esp_http_client_set_header(http_client_post, "Content-Type", "application/x-www-form-urlencoded");
@@ -99,13 +115,14 @@ int POST(const char* server_uri, const char* to_send)
 
     if (err == ESP_OK)
     {
-        printf("POST Request Successful\n");
-        printf("HTTP Status Code: %d\n", status_code);
+        ESP_LOGI(TAG, "POST Request Successful\n");
+        ESP_LOGI(TAG, "HTTP Status Code: %d\n", status_code);
         return status_code;
     }
     else
     {
-        printf("HTTP POST request failed with error: %s\n", esp_err_to_name(err));
+        ESP_LOGI(TAG, "HTTP POST request failed with error: %s\n", esp_err_to_name(err));
         return status_code; // Return the HTTP status code even on error
     }
 }
+
