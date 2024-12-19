@@ -58,11 +58,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 esp_wifi_stop();  // Stop the Wi-Fi driver
                 ESP_LOGI(TAG, "Wi-Fi disabled.");
                 // Delay to allow time for error logging and BLE advertisement setup
-                vTaskDelay(1000);
+                //vTaskDelay(1000);
 
                 // Trigger BLE advertising for provisioning
-                ESP_LOGI(TAG, "Starting BLE advertising for provisioning...");
-                ble_app_advertise();
+                ble_advert();
 
                 // Optionally restart the Wi-Fi or device to retry the configuration
                 // esp_restart();
@@ -129,7 +128,7 @@ esp_err_t wifi_connect()
             main_struct.isProvisioned = false;
             esp_wifi_stop();  // Stop the Wi-Fi driver
             ESP_LOGI(TAG, "Wi-Fi disabled.");
-            ble_app_advertise();  // Start BLE advertising for provisioning
+            ble_advert();  // Start BLE advertising for provisioning
             return ESP_ERR_WIFI_NOT_CONNECT;  // Return error code to indicate failure to connect
         }
         strncpy((char *)wifi_config.sta.password, main_struct.password, sizeof(wifi_config.sta.password) - 1);

@@ -17,7 +17,7 @@ typedef struct
 } main_struct_t;
 
 extern main_struct_t main_struct;
-void ble_app_advertise(void);
+void ble_advert(void);
 
 
 #endif

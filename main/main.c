@@ -184,7 +184,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0)
             g_conn_handle = event->connect.conn_handle;
         else if (event->connect.status != 0)
-            ble_app_advertise();
+            ble_advert();
 
         break;
     case BLE_GAP_EVENT_DISCONNECT:
@@ -193,7 +193,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     // Advertise again after completion of the event/advertisement
     case BLE_GAP_EVENT_ADV_COMPLETE:
         ESP_LOGI("GAP", "BLE GAP EVENT");
-        ble_app_advertise();
+        ble_advert();
 
         break;
     default:
@@ -205,26 +205,34 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 #define MANUFACTURER_NAME "Rodland Farms"
 
 // Define the BLE connection
-void ble_app_advertise(void)
-{
-    // GAP - device name definition
+void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
     const char *device_name;
     memset(&fields, 0, sizeof(fields));
     device_name = ble_svc_gap_device_name(); // Read the BLE device name
 
+    // Set the device name
     fields.name = (uint8_t *)device_name;
     fields.name_len = strlen(device_name);
     fields.name_is_complete = 1;
+
+    // Set the service UUID in the advertisement data
+    fields.uuids16 = (uint8_t[]){SSID_CHR_UUID, PASS_CHR_UUID, NAME_CHR_UUID, LOCATION_CHR_UUID};  // Include your service UUIDs here
+    fields.num_uuids16 = 4;  // Number of 16-bit UUIDs being advertised
+
+    // Set the advertisement fields
     ble_gap_adv_set_fields(&fields);
 
-    // GAP - device connectivity definition
+    // Define advertisement parameters
     struct ble_gap_adv_params adv_params;
     memset(&adv_params, 0, sizeof(adv_params));
-    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND; // connectable or non-connectable
-    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; // discoverable or non-discoverable
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  // Connectable
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; // Discoverable
     ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);
 }
+
+
+
 
 static void nimble_host_task(void *param)
 {
@@ -337,18 +345,8 @@ void ble_app_on_sync(void)
     ble_app_advertise();
 }
 
-// Main application entry point
-void app_main() {
-    char *TAG = "MAIN";
-    // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation
-    adc1_config_width(ADC_WIDTH_BIT_12);  // Set ADC width to 12 bits (0-4095 range)
-    adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
-
-    nvs_init();
-    read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, &main_struct.credentials_recv);
-
-    // Only initialize BLE if credentials are NOT set
-    if (!main_struct.credentials_recv) {
+void ble_advert(void){
+        ESP_LOGI(TAG, "Starting BLE advertising for provisioning...");
         // Initialize NimBLE host stack
         nimble_port_init();                        // 3 - Initialize the host stack
         //ble_svc_gap_device_name_set("BLE-Server"); // 4 - Initialize NimBLE configuration - server name
@@ -363,12 +361,27 @@ void app_main() {
         // Task entry log 
         ESP_LOGI(TAG, "NimBLE host task has been started!");
 
-    } else {
-        ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
-        // Check Wifi Credentials 
-        xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
+}
 
-        xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
-    }
+// Main application entry point
+void app_main() {
+    char *TAG = "MAIN";
+    // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation
+    adc1_config_width(ADC_WIDTH_BIT_12);  // Set ADC width to 12 bits (0-4095 range)
+    adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
+
+    nvs_init();
+    read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, &main_struct.credentials_recv);
+
+    // Only initialize BLE if credentials are NOT set
+    if (!main_struct.credentials_recv) {
+        ble_advert();
+    } 
+    else {
+    ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
+    disable_ble();  // Stop BLE advertising
+    xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
+    xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
+}
 
 }
