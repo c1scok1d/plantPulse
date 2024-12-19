@@ -74,7 +74,9 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
     nvs_close(nvs_handle);
 
     printf("NVS stored ssid %s\n", ssid);
-    printf("NVS stored passwork %s\n", password);
+    printf("NVS stored password %s\n", password);
+    printf("NVS stored name %s\n", name);
+    printf("NVS stored location %s\n", location);
     printf("NVS stored wifi_value %d\n", value);
 
     return err;
@@ -86,6 +88,8 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
     esp_err_t err;
     size_t ssid_len = 32;
     size_t pass_len = 64;
+    size_t name_len = 32;
+    size_t location_len = 64;
     // Open NVS handle
     err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK)
@@ -138,7 +142,7 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
 
     // Read Name
     
-    err = nvs_get_str(nvs_handle, "name", name, &pass_len);
+    err = nvs_get_str(nvs_handle, "name", name, &name_len);
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
         ESP_LOGW("NVS", "Device name not found. Setting default value.");
@@ -159,7 +163,7 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
 
     // Read Location
     
-    err = nvs_get_str(nvs_handle, "location", location, &pass_len);
+    err = nvs_get_str(nvs_handle, "location", location, &location_len);
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
         ESP_LOGW("NVS", "Device location not found. Setting default value.");
