@@ -356,7 +356,7 @@ void ble_app_on_sync(void)
 
     // Create final device name with "PlantPulse-" prefix and the last 4 bytes of the MAC address
     char final_device_name[50];  // Ensure enough space for "PlantPulse-" + MAC address
-    snprintf(final_device_name, sizeof(final_device_name), "PlantPulse-%s", device_name);
+    snprintf(final_device_name, sizeof(final_device_name), "Plant Pulse %s", device_name);
 
     // Set the BLE device name
     ble_svc_gap_device_name_set(final_device_name);  // Set the device name
