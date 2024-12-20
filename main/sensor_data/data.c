@@ -152,7 +152,7 @@ void uploadReadingsTask(void *param)
 
     const char *serverName = "http://athome.rodlandfarms.com";
     const char *server_path = "/api/esp/data?";
-    const char* apiKey = "gwGWZKjADUeHe1f06muhnhdt38pmVwBaNuiyL18WvLHLMeFUZYcqOZqsgvyl";
+    const char* apiKey = "ijYCm00T79FzzGNGkghmUFXLRzSQTIPaNpT01zHoWvrKhlWU5x6qyzvi9aPr";
 
     // Construct the server URI
     char server_uri[256];
@@ -210,7 +210,7 @@ void uploadReadings(int moisture, float battery, const char* hostname, const cha
     xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
 }
 
-
+/*
 void enter_deep_sleep()
 {
     #define SLEEP_DURATION_SEC    30     
@@ -220,6 +220,30 @@ void enter_deep_sleep()
 
     // Configure the RTC timer to wake up in 24 hours (86400 seconds)
     esp_sleep_enable_timer_wakeup(sleep_duration_us); // Time in microseconds
+
+    // Enter deep sleep
+    esp_deep_sleep_start();
+} */
+
+
+// Enumeration for predefined sleep durations
+typedef enum {
+    SLEEP_30_SEC = 30,     // 30 seconds
+    SLEEP_1_HOUR = 3600,   // 1 hour (3600 seconds)
+    SLEEP_8_HOURS = 28800, // 8 hours (28800 seconds)
+    SLEEP_24_HOURS = 86400 // 24 hours (86400 seconds)
+} SleepDuration;
+
+// Function to enter deep sleep based on the selected duration
+void enter_deep_sleep(SleepDuration duration)
+{
+    static const char *TAG = "SLEEP";
+    uint64_t sleep_duration_us = (uint64_t)duration * (uint64_t)1000000; // Convert seconds to microseconds
+
+    ESP_LOGI(TAG, "Entering deep sleep mode for %d seconds...", duration);
+
+    // Configure the RTC timer to wake up after the specified sleep duration
+    esp_sleep_enable_timer_wakeup(sleep_duration_us);
 
     // Enter deep sleep
     esp_deep_sleep_start();
@@ -244,6 +268,15 @@ void monitor()
     // Delay for 5 seconds
     vTaskDelay(pdMS_TO_TICKS(5000));  
     
-    // Enter deep sleep
-    enter_deep_sleep();
+    // Sleep for 30 seconds
+    //enter_deep_sleep(SLEEP_30_SEC);
+
+    // Sleep for 1 hour
+    enter_deep_sleep(SLEEP_1_HOUR);
+
+    // Sleep for 8 hours
+    //enter_deep_sleep(SLEEP_8_HOURS);
+
+    // Sleep for 24 hours
+    //enter_deep_sleep(SLEEP_24_HOURS);
 }
