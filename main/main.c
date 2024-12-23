@@ -28,6 +28,7 @@
 #define PASS_CHR_UUID 0xFEF5
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
 #define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
+#define API_TOKEN_UUID 0xFEF8
 #define PROV_STATUS_UUID 0xDEAD
 #define MANUFACTURER_NAME "Rodland Farms"
 // Define GPIO pin for the button
@@ -222,7 +223,7 @@ void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
     const char *device_name;
-    const char *company_identifier= "Rodland Farms";  
+    //const char *company_identifier= "Rodland Farms";  
     device_name = ble_svc_gap_device_name(); // Read the BLE device name; 
 
     // Prepare advertising data
