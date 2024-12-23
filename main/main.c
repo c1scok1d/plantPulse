@@ -20,6 +20,8 @@
 #include "driver/adc.h"
 #include "data.h"
 #include "rest_methods.h"
+#include "driver/gpio.h"
+#include "esp_rom_gpio.h" 
 
 #define SSID_CHR_UUID 0xFEF4
 #define PASS_CHR_UUID 0xFEF5
@@ -347,7 +349,7 @@ void erase_nvs_data() {
 
 // Function to configure GPIO for the button
 void configure_button_gpio() {
-    gpio_pad_select_gpio(BUTTON_GPIO);
+    esp_rom_gpio_pad_select_gpio(BUTTON_GPIO);
     gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
     gpio_set_pull_mode(BUTTON_GPIO, GPIO_PULLUP_ONLY);  // Pull-up to avoid floating state
 }
@@ -359,7 +361,7 @@ void monitor_button_press(void *pvParameter) {
             ESP_LOGI("Button", "Button pressed, erasing NVS data.");
             erase_nvs_data();  // Call function to erase data
             vTaskDelay(1000 / portTICK_PERIOD_MS);  // Debounce delay (1 second)
-            esp_restart()
+            esp_restart();
         }
         vTaskDelay(100 / portTICK_PERIOD_MS);  // Polling interval (100ms)
     }
