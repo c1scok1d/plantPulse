@@ -25,6 +25,7 @@
 #define PASS_CHR_UUID 0xFEF5
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
 #define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
+#define API_TOKEN_UUID 0xFEF8 
 #define PROV_STATUS_UUID 0xDEAD
 #define MANUFACTURER_NAME "Rodland Farms"
 
@@ -167,6 +168,12 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .access_cb = device_read,
                 .val_handle = &prov_status_attr_handle
             },
+            {
+                .uuid = BLE_UUID16_DECLARE(API_TOKEN_UUID), // Define UUID for reading
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .access_cb = device_read,
+                .val_handle = &prov_status_attr_handle
+            },
             {0} // Terminating the characteristics array
         }
     },
@@ -204,43 +211,60 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
+// Define your UUIDs here
+#define SSID_CHR_UUID     0x1234
+#define PASS_CHR_UUID     0x5678
+#define NAME_CHR_UUID     0x9abc
+#define LOCATION_CHR_UUID 0xdef0
+#define API_TOKEN_UUID    0x1122
+#define PROV_STATUS_UUID  0x3344
+
 void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
-    const char *device_name;
-    const char *company_identifier= "Rodland Farms";  
-    device_name = ble_svc_gap_device_name(); // Read the BLE device name; 
+
+    const char *company_identifier = "Rodland Farms";  
+    const char *device_name = ble_svc_gap_device_name(); // Read the BLE device name
 
     // Prepare advertising data
     uint8_t advertising_data[31];  // Maximum size for BLE advertising data is 31 bytes
     uint8_t len = 0;
 
     // Set the flags (LE General Discoverable | LE BR/EDR Not Supported)
-    advertising_data[len++] = 2;                 // Length of flags
+    advertising_data[len++] = 2;                 // Length of flags (1 byte for type, 1 byte for data)
     advertising_data[len++] = 0x01;              // Type: Flags
     advertising_data[len++] = 0x02 | 0x06;       // Flags: LE General Discoverable | LE BR/EDR Not Supported
 
     // Add device name to the advertising data
-    uint8_t name_len = strlen(device_name) + 1;  // +1 for the 0x09 type byte
-    advertising_data[len++] = name_len;          // Length of the name
+    uint8_t name_len = strlen(device_name) + 1;  // +1 for the null terminator
+    advertising_data[len++] = name_len;          // Length of the name (including the type byte)
     advertising_data[len++] = 0x09;              // Type: Complete Local Name
 
     // Copy the device name into the advertising data
     memcpy(&advertising_data[len], device_name, strlen(device_name));
     len += strlen(device_name);
-    
-    // Add the company identifier
-    memcpy(&advertising_data[len], company_identifier, sizeof(company_identifier));
-    len += sizeof(company_identifier);
 
-    // Set the advertisement fields
-    fields.uuids16 = (uint8_t[]){SSID_CHR_UUID, PASS_CHR_UUID, NAME_CHR_UUID, LOCATION_CHR_UUID};  // Include your service UUIDs here
-    fields.num_uuids16 = 4;  // Number of 16-bit UUIDs being advertised
+    // Add 16-bit UUIDs
+    uint8_t uuids[] = {SSID_CHR_UUID};
+    uint8_t num_uuids = sizeof(uuids) / sizeof(uuids[0]);
 
-    // Set the advertisement fields
-    ble_gap_adv_set_fields(&fields);
+    // Add length for UUIDs (2 bytes per UUID, plus 1 byte for the type)
+    advertising_data[len++] = 1 + (num_uuids * 2);  // Length of the UUID data
+    advertising_data[len++] = 0x02;  // Type: 16-bit UUIDs
 
-    // Set the advertising data
+    // Add the UUIDs (2 bytes per UUID, little-endian format)
+    for (int i = 0; i < num_uuids; i++) {
+        advertising_data[len++] = (uint8_t)(uuids[i] & 0xFF);    // Low byte
+        advertising_data[len++] = (uint8_t)((uuids[i] >> 8) & 0xFF); // High byte
+    }
+
+    // Add the company identifier (use strlen to get the actual length)
+    //advertising_data[len++] = strlen(company_identifier) + 1; // Length of company identifier string (including type byte)
+    //advertising_data[len++] = 0xFF;  // Type: Manufacturer Specific Data
+    //memcpy(&advertising_data[len], company_identifier, strlen(company_identifier));
+    //len += strlen(company_identifier);
+
+    // Set the advertising data (including the name, UUIDs, and company identifier)
     int rc = ble_gap_adv_set_data(advertising_data, len);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to set advertising data, error code %d", rc);
@@ -252,6 +276,8 @@ void ble_app_advertise(void) {
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  // Connectable
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; // Discoverable
+    adv_params.itvl_min = 0x20;   // Minimum advertisement interval (in 0.625ms units)
+    adv_params.itvl_max = 0x40;   // Maximum advertisement interval (in 0.625ms units)
 
     // Start advertising
     rc = ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);
