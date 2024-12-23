@@ -227,10 +227,10 @@ void monitor()
     uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
 
     // Delay for 5 seconds
-    vTaskDelay(pdMS_TO_TICKS(5000));  
+    vTaskDelay(pdMS_TO_TICKS(3000));  
     
     // Sleep for 30 seconds
-    enter_deep_sleep(SHORT_SLEEP);
+    enter_deep_sleep(FIVE_MIN_SLEEP);
 
     // Sleep for 1 hour
     //enter_deep_sleep(SLEEP_1_HOUR);
