@@ -209,32 +209,7 @@ void uploadReadings(int moisture, float battery, const char* hostname, const cha
     xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
 }
 
-<<<<<<< HEAD
-=======
-// Enumeration for predefined sleep durations
-typedef enum {
-    SLEEP_30_SEC = 30,     // 30 seconds
-    SLEEP_1_HOUR = 3600,   // 1 hour (3600 seconds)
-    SLEEP_8_HOURS = 28800, // 8 hours (28800 seconds)
-    SLEEP_24_HOURS = 86400 // 24 hours (86400 seconds)
-} SleepDuration;
 
-// Function to enter deep sleep based on the selected duration
-void enter_deep_sleep(SleepDuration duration)
-{
-    static const char *TAG = "SLEEP";
-    uint64_t sleep_duration_us = (uint64_t)duration * (uint64_t)1000000; // Convert seconds to microseconds
-
-    ESP_LOGI(TAG, "Entering deep sleep mode for %d seconds...", duration);
-
-    // Configure the RTC timer to wake up after the specified sleep duration
-    esp_sleep_enable_timer_wakeup(sleep_duration_us);
-
-    // Enter deep sleep
-    esp_deep_sleep_start();
-}
-
->>>>>>> 667ba44ba242eba8df16179fffda291d8998f8e1
 void monitor()
 {
     //int count = 0;
