@@ -20,6 +20,8 @@
 #include "driver/adc.h"
 #include "data.h"
 #include "rest_methods.h"
+#include "driver/gpio.h"
+#include "esp_rom_gpio.h" 
 
 #define SSID_CHR_UUID 0xFEF4
 #define PASS_CHR_UUID 0xFEF5
@@ -28,10 +30,11 @@
 #define API_TOKEN_UUID 0xFEF8 
 #define PROV_STATUS_UUID 0xDEAD
 #define MANUFACTURER_NAME "Rodland Farms"
+// Define GPIO pin for the button
+#define BUTTON_GPIO 6
 
 
-
-char *TAG = "PlantPulse";
+char *TAG = "-";
 
 static bool ssid_pswd_flag[2] = {
     false,
@@ -342,6 +345,54 @@ void nvs_init(void)
     }
 }
 
+// Function to erase NVS data
+void erase_nvs_data() {
+    esp_err_t err;
+    nvs_handle my_handle;
+
+    // Open NVS for writing
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Error opening NVS for erase: %s", esp_err_to_name(err));
+        return;
+    }
+
+    // Erase all data stored in NVS
+    err = nvs_erase_all(my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Error erasing NVS: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI("NVS", "NVS data erased successfully.");
+    }
+
+    // Commit changes and close NVS
+    err = nvs_commit(my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Error committing NVS: %s", esp_err_to_name(err));
+    }
+    nvs_close(my_handle);
+}
+
+// Function to configure GPIO for the button
+void configure_button_gpio() {
+    esp_rom_gpio_pad_select_gpio(BUTTON_GPIO);
+    gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(BUTTON_GPIO, GPIO_PULLUP_ONLY);  // Pull-up to avoid floating state
+}
+
+// Function to monitor the button press and trigger NVS erase
+void monitor_button_press(void *pvParameter) {
+    while (1) {
+        if (gpio_get_level(BUTTON_GPIO) == 0) {  // Check if the button is pressed (assuming active low)
+            ESP_LOGI("Button", "Button pressed, erasing NVS data.");
+            erase_nvs_data();  // Call function to erase data
+            vTaskDelay(1000 / portTICK_PERIOD_MS);  // Debounce delay (1 second)
+            esp_restart();
+        }
+        vTaskDelay(100 / portTICK_PERIOD_MS);  // Polling interval (100ms)
+    }
+}
+
 void notify_status(void *arg)
 {
     while (1)
@@ -418,6 +469,8 @@ void ble_advert(void){
 // Main application entry point
 void app_main() {
     char *TAG = "MAIN";
+    // Configure GPIO for button
+    configure_button_gpio();
     // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation
     adc1_config_width(ADC_WIDTH_BIT_12);  // Set ADC width to 12 bits (0-4095 range)
     adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
@@ -437,6 +490,9 @@ void app_main() {
     } else {
     ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
     xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
+
+    // Start a task to monitor the button press
+    xTaskCreate(monitor_button_press, "monitor_button_press", 2 * 1024, NULL, 5, NULL);
     //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
 }
 
