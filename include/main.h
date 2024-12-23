@@ -16,8 +16,16 @@ typedef struct
     float battery_data;
 } main_struct_t;
 
+typedef enum {
+    SHORT_SLEEP = 10,   // 10 seconds
+    MEDIUM_SLEEP = 60,  // 1 minute
+    LONG_SLEEP = 3600   // 1 hour
+} SleepDuration;  // Enum for sleep duration options
+
 extern main_struct_t main_struct;
+
 void ble_advert(void);
+void enter_deep_sleep(SleepDuration duration);
 
 
 #endif

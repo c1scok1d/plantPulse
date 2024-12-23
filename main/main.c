@@ -22,6 +22,7 @@
 #include "rest_methods.h"
 #include "driver/gpio.h"
 #include "esp_rom_gpio.h" 
+#include "esp_sleep.h"
 
 #define SSID_CHR_UUID 0xFEF4
 #define PASS_CHR_UUID 0xFEF5
@@ -194,6 +195,10 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
         break;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "CONNECTED!" : "DISCONNECTED!");
+        ESP_LOGI("GAP", "Rebooting...");
+        vTaskDelay(100);
+        esp_restart();
+        
         break;
     // Advertise again after completion of the event/advertisement
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -232,12 +237,24 @@ void ble_app_advertise(void) {
     memcpy(&advertising_data[len], device_name, strlen(device_name));
     len += strlen(device_name);
     
-    // Add the company identifier
-    memcpy(&advertising_data[len], company_identifier, sizeof(company_identifier));
-    len += sizeof(company_identifier);
+
+    // Add 16-bit UUIDs
+    uint8_t uuids[] = {BLE_UUID16_DECLARE(SSID_CHR_UUID)};
+    uint8_t num_uuids = sizeof(uuids) / sizeof(uuids[0]);
+
+    // Add length for UUIDs (2 bytes per UUID, plus 1 byte for the type)
+    advertising_data[len++] = 1 + (num_uuids * 2);  // Length of the UUID data
+    advertising_data[len++] = 0x02;  // Type: 16-bit UUIDs
+
+    // Add the UUIDs (2 bytes per UUID, little-endian format)
+    for (int i = 0; i < num_uuids; i++) {
+        advertising_data[len++] = (uint8_t)(uuids[i] & 0xFF);    // Low byte
+        advertising_data[len++] = (uint8_t)((uuids[i] >> 8) & 0xFF); // High byte
+    }
+
 
     // Set the advertisement fields
-    fields.uuids16 = (uint8_t[]){SSID_CHR_UUID, PASS_CHR_UUID, NAME_CHR_UUID, LOCATION_CHR_UUID};  // Include your service UUIDs here
+    fields.uuids16 = (uint8_t[]){SSID_CHR_UUID};  // Include your service UUIDs here
     fields.num_uuids16 = 4;  // Number of 16-bit UUIDs being advertised
 
     // Set the advertisement fields
@@ -304,7 +321,7 @@ void check_credentials(void *arg)
             vTaskDelete(NULL);
         //}
 
-        vTaskDelay(1000);
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
@@ -355,17 +372,44 @@ void configure_button_gpio() {
 }
 
 // Function to monitor the button press and trigger NVS erase
+#define SHORT_PRESS_THRESHOLD 1000  // Time in milliseconds for a short press (e.g., 1 second)
+#define LONG_PRESS_THRESHOLD 3000   // Time in milliseconds for a long press (e.g., 3 seconds)
+
 void monitor_button_press(void *pvParameter) {
+    static bool button_pressed = false;  // Tracks whether the button is pressed
+    static TickType_t press_start_time = 0;  // Holds the time when the button was first pressed
+
     while (1) {
-        if (gpio_get_level(BUTTON_GPIO) == 0) {  // Check if the button is pressed (assuming active low)
-            ESP_LOGI("Button", "Button pressed, erasing NVS data.");
-            erase_nvs_data();  // Call function to erase data
-            vTaskDelay(1000 / portTICK_PERIOD_MS);  // Debounce delay (1 second)
-            esp_restart();
+        int button_state = gpio_get_level(BUTTON_GPIO);  // Read the current state of the button
+
+        if (button_state == 0 && !button_pressed) {  // Button pressed (active low) and not already processed
+            button_pressed = true;  // Mark button as pressed
+            press_start_time = xTaskGetTickCount();  // Store the time when the button was pressed
+            ESP_LOGI("BUTTON", "Button press detected...");
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);  // Polling interval (100ms)
+
+        if (button_state == 1 && button_pressed) {  // Button released (active low)
+            button_pressed = false;  // Reset button state
+
+            TickType_t press_duration = xTaskGetTickCount() - press_start_time;  // Calculate press duration in ticks
+            uint32_t press_duration_ms = press_duration * portTICK_PERIOD_MS;  // Convert ticks to milliseconds
+
+            // Check if the press duration was a short or long press
+            if (press_duration_ms < SHORT_PRESS_THRESHOLD) {
+                ESP_LOGI("BUTTON", "Short press detected...");
+                //erase_nvs_data();  // Perform short press action (e.g., erase NVS)
+            } else if (press_duration_ms >= LONG_PRESS_THRESHOLD) {
+                ESP_LOGI("BUTTON", "Long press detected. Erasing NVS and Rebooting...");
+                erase_nvs_data();
+                vTaskDelay(100 / portTICK_PERIOD_MS);  // Allow time for logging
+                esp_restart();  // Perform long press action (e.g., reboot device)
+            }
+        }
+
+        vTaskDelay(10 / portTICK_PERIOD_MS);  // Short polling interval to keep the system responsive
     }
 }
+
 
 void notify_status(void *arg)
 {
@@ -439,6 +483,27 @@ void ble_advert(void){
         ESP_LOGI(TAG, "NimBLE host task has been started!");
 
 }
+
+// Function to enter deep sleep based on the selected duration
+void enter_deep_sleep(SleepDuration duration)
+{
+    //#define BUTTON_GPIO 6
+    static const char *TAG = "SLEEP";
+    uint64_t sleep_duration_us = (uint64_t)duration * (uint64_t)1000000; // Convert seconds to microseconds
+
+    ESP_LOGI(TAG, "Entering deep sleep mode for %d seconds...", duration);
+
+    // Configure the RTC timer to wake up after the specified sleep duration
+    esp_sleep_enable_timer_wakeup(sleep_duration_us);
+
+    // Configure the button GPIO to wake up the device on a button press (active low)
+    esp_sleep_enable_ext0_wakeup(BUTTON_GPIO, 0);  // 0 for active low, 1 for active high
+
+
+    // Enter deep sleep
+    esp_deep_sleep_start();
+}
+
 
 // Main application entry point
 void app_main() {
