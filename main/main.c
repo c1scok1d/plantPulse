@@ -261,11 +261,17 @@ void ble_app_advertise(void) {
         advertising_data[len++] = (uint8_t)((uuids[i] >> 8) & 0xFF); // High byte
     }
 
-    // Add the company identifier (use strlen to get the actual length)
-    //advertising_data[len++] = strlen(company_identifier) + 1; // Length of company identifier string (including type byte)
-    //advertising_data[len++] = 0xFF;  // Type: Manufacturer Specific Data
-    //memcpy(&advertising_data[len], company_identifier, strlen(company_identifier));
-    //len += strlen(company_identifier);
+    // Add the company identifier (Manufacturer Specific Data)
+    advertising_data[len++] = strlen(company_identifier) + 1; // Length of company identifier string (including type byte)
+    advertising_data[len++] = 0xFF;  // Type: Manufacturer Specific Data
+    memcpy(&advertising_data[len], company_identifier, strlen(company_identifier));
+    len += strlen(company_identifier);
+
+    // Check if advertising data exceeds maximum size (31 bytes)
+    if (len > 31) {
+        ESP_LOGE(TAG, "Advertising data exceeds maximum size of 31 bytes");
+        return;
+    }
 
     // Set the advertising data (including the name, UUIDs, and company identifier)
     int rc = ble_gap_adv_set_data(advertising_data, len);
@@ -345,53 +351,68 @@ void nvs_init(void)
     }
 }
 
-// Function to erase NVS data
-void erase_nvs_data() {
-    esp_err_t err;
-    nvs_handle my_handle;
+// Define the GPIO pin connected to the button
+#define BUTTON_GPIO 6
+#define LONG_PRESS_THRESHOLD 2000  // Long press threshold in milliseconds
+#define SHORT_PRESS_THRESHOLD 500  // Short press threshold in milliseconds
 
-    // Open NVS for writing
-    err = nvs_open("storage", NVS_READWRITE, &my_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE("NVS", "Error opening NVS for erase: %s", esp_err_to_name(err));
-        return;
-    }
+static bool button_pressed = false;
+static uint32_t press_start_time = 0;
 
-    // Erase all data stored in NVS
-    err = nvs_erase_all(my_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE("NVS", "Error erasing NVS: %s", esp_err_to_name(err));
+// Function to erase NVS (example implementation)
+void erase_nvs() {
+    ESP_LOGI("NVS", "Erasing NVS...");
+    esp_err_t err = nvs_flash_erase();
+    if (err == ESP_OK) {
+        ESP_LOGI("NVS", "NVS erased successfully!");
     } else {
-        ESP_LOGI("NVS", "NVS data erased successfully.");
+        ESP_LOGE("NVS", "Failed to erase NVS: %s", esp_err_to_name(err));
     }
-
-    // Commit changes and close NVS
-    err = nvs_commit(my_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE("NVS", "Error committing NVS: %s", esp_err_to_name(err));
-    }
-    nvs_close(my_handle);
 }
 
-// Function to configure GPIO for the button
-void configure_button_gpio() {
-    esp_rom_gpio_pad_select_gpio(BUTTON_GPIO);
-    gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(BUTTON_GPIO, GPIO_PULLUP_ONLY);  // Pull-up to avoid floating state
-}
+// Interrupt Service Routine (ISR) for detecting button presses
+void IRAM_ATTR button_isr_handler(void* arg) {
+    if (gpio_get_level(BUTTON_GPIO) == 0) {  // Button pressed (assuming pull-up configuration)
+        press_start_time = esp_timer_get_time();  // Start timing the press
+        button_pressed = true;
+    } else {  // Button released
+        uint32_t press_duration = (esp_timer_get_time() - press_start_time) / 1000;  // in milliseconds
+        button_pressed = false;
 
-// Function to monitor the button press and trigger NVS erase
-void monitor_button_press(void *pvParameter) {
-    while (1) {
-        if (gpio_get_level(BUTTON_GPIO) == 0) {  // Check if the button is pressed (assuming active low)
-            ESP_LOGI("Button", "Button pressed, erasing NVS data.");
-            erase_nvs_data();  // Call function to erase data
-            vTaskDelay(1000 / portTICK_PERIOD_MS);  // Debounce delay (1 second)
-            esp_restart();
+        if (press_duration >= LONG_PRESS_THRESHOLD) {
+            ESP_LOGI("BUTTON", "Long press detected - Erasing NVS");
+            erase_nvs();
+            esp_restart();  // Restart the system after NVS is erased
+        } else if (press_duration >= SHORT_PRESS_THRESHOLD) {
+            ESP_LOGI("BUTTON", "Short press detected");
+        } else {
+            ESP_LOGI("BUTTON", "Press too short to detect");
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);  // Polling interval (100ms)
     }
 }
+
+// Function to monitor the button press (with debounce and timing)
+void monitor_button_press(void *pvParameter) {
+    // Set up GPIO for the button (input with pull-up resistor)
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .intr_type = GPIO_INTR_ANYEDGE  // Trigger interrupt on both press and release
+    };
+    gpio_config(&io_conf);
+
+    // Install ISR service and add the interrupt handler
+    gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
+    gpio_isr_handler_add(BUTTON_GPIO, button_isr_handler, NULL);
+
+    // Instead of busy-waiting, use a delay to avoid using too much stack
+    while (1) {
+        vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced delay to avoid high stack usage
+    }
+}
+
+
 
 void notify_status(void *arg)
 {
@@ -470,7 +491,7 @@ void ble_advert(void){
 void app_main() {
     char *TAG = "MAIN";
     // Configure GPIO for button
-    configure_button_gpio();
+    //configure_button_gpio();
     // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation
     adc1_config_width(ADC_WIDTH_BIT_12);  // Set ADC width to 12 bits (0-4095 range)
     adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
@@ -492,7 +513,7 @@ void app_main() {
     xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
 
     // Start a task to monitor the button press
-    xTaskCreate(monitor_button_press, "monitor_button_press", 2 * 1024, NULL, 5, NULL);
+    xTaskCreate(monitor_button_press, "monitor_button_press", 2 * 2048, NULL, 5, NULL);
     //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
 }
 
