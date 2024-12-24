@@ -261,7 +261,7 @@ void ble_app_advertise(void) {
 
 
     // Set the advertisement fields
-    fields.uuids16 = (uint8_t[]){SSID_CHR_UUID};  // Include your service UUIDs here
+    fields.uuids16 = (uint8_t[]){'021A9004-0382-4AEA-BFF4-6B3F1C5ADFB4'};  // Include your service UUIDs here
     fields.num_uuids16 = 4;  // Number of 16-bit UUIDs being advertised
 
     // Set the advertisement fields
