@@ -24,6 +24,7 @@
 #include "esp_rom_gpio.h" 
 #include "esp_sleep.h"
 
+#define SERVICE_CHR_UUID 0xFEF3
 #define SSID_CHR_UUID 0xFEF4
 #define PASS_CHR_UUID 0xFEF5
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
@@ -109,6 +110,13 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         ESP_LOGI(TAG, "Received Device Location: %s", main_struct.location);
         break;
 
+    case API_TOKEN_UUID:
+        ssid_pswd_flag[4] = true;
+        strncpy(main_struct.apiToken, (char *)ctxt->om->om_data, ctxt->om->om_len);
+        main_struct.apiToken[ctxt->om->om_len] = '\0';
+        ESP_LOGI(TAG, "Received Device API Token: %s", main_struct.apiToken);
+        break;
+
     default:
         ESP_LOGW(TAG, "Unknown characteristic written.");
         return BLE_ATT_ERR_UNLIKELY;
@@ -119,13 +127,8 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 
         main_struct.credentials_recv = true;
 
-        save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.credentials_recv);
-        printf("Password saved as: %s\n", main_struct.password);
-        printf("SSID saved as: %s\n", main_struct.ssid);
-        printf("Name saved as: %s\n", main_struct.password);
-        printf("Location saved as: %s\n", main_struct.ssid);
-        printf("Is Provisioned: %d\n", main_struct.credentials_recv);
-    }
+        save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, main_struct.credentials_recv);
+        }
 
     return 0;
 }
@@ -133,9 +136,9 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 // Read data from ESP32 defined as server
 static int device_read(uint16_t con_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    // uint32_t status_data = main_struct.isProvisioned ? 1 : 0; // Example: 1 = provisioned, 0 = not provisioned
-    // os_mbuf_append(ctxt->om, &status_data, sizeof(status_data));
-    // ESP_LOGI(TAG, "BLE Read: Provisioning Status - %u", status_data);
+    /* uint32_t status_data = main_struct.isProvisioned ? 1 : 0; // Example: 1 = provisioned, 0 = not provisioned
+     os_mbuf_append(ctxt->om, &status_data, sizeof(status_data));
+     ESP_LOGI(TAG, "BLE Read: Provisioning Status - %u", status_data);*/
     return 0; // Success
 }
 
@@ -167,13 +170,12 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .access_cb = device_write      // Write callback
             },
             {
-                .uuid = BLE_UUID16_DECLARE(PROV_STATUS_UUID), // Define UUID for reading
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-                .access_cb = device_read,
-                .val_handle = &prov_status_attr_handle
+                .uuid = BLE_UUID16_DECLARE(API_TOKEN_UUID), // Define UUID for reading
+                .flags = BLE_GATT_CHR_F_WRITE, // Write access only
+                .access_cb = device_write,      // Write callback
             },
             {
-                .uuid = BLE_UUID16_DECLARE(API_TOKEN_UUID), // Define UUID for reading
+                .uuid = BLE_UUID16_DECLARE(PROV_STATUS_UUID), // Define UUID for reading
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .access_cb = device_read,
                 .val_handle = &prov_status_attr_handle
@@ -219,6 +221,24 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
+#define LED_GPIO 2
+
+void blink_led(void *arg) {
+    esp_rom_gpio_pad_select_gpio(LED_GPIO);
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_GPIO, 0);  // Initially turn off the LED
+    while (!main_struct.credentials_recv) {
+        gpio_set_level(LED_GPIO, 1); // Turn LED on
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for 500ms
+        gpio_set_level(LED_GPIO, 0); // Turn LED off
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for 500ms
+    }
+
+    // Once the configuration is successful, turn off the LED
+    gpio_set_level(LED_GPIO, 0);
+    vTaskDelete(NULL);
+}
+
 void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
@@ -251,7 +271,7 @@ void ble_app_advertise(void) {
 
     // Add length for UUIDs (2 bytes per UUID, plus 1 byte for the type)
     advertising_data[len++] = 1 + (num_uuids * 2);  // Length of the UUID data
-    advertising_data[len++] = 0x02;  // Type: 16-bit UUIDs
+    advertising_data[len++] = 0x03;  // Type: 16-bit UUIDs
 
     // Add the UUIDs (2 bytes per UUID, little-endian format)
     for (int i = 0; i < num_uuids; i++) {
@@ -259,13 +279,6 @@ void ble_app_advertise(void) {
         advertising_data[len++] = (uint8_t)((uuids[i] >> 8) & 0xFF); // High byte
     }
 
-
-    // Set the advertisement fields
-    fields.uuids16 = (uint8_t[]){'021A9004-0382-4AEA-BFF4-6B3F1C5ADFB4'};  // Include your service UUIDs here
-    fields.num_uuids16 = 4;  // Number of 16-bit UUIDs being advertised
-
-    // Set the advertisement fields
-    ble_gap_adv_set_fields(&fields);
 
     // Set the advertising data
     int rc = ble_gap_adv_set_data(advertising_data, len);
@@ -285,6 +298,8 @@ void ble_app_advertise(void) {
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to start advertising, error code %d", rc);
     }
+    // Start the task to blink the LED while waiting for configuration
+    xTaskCreate(blink_led, "Blink LED", 2048, NULL, 5, NULL);
 }
 
 static void nimble_host_task(void *param)
@@ -420,6 +435,10 @@ void monitor_button_press(void *pvParameter) {
 
 void notify_status(void *arg)
 {
+    char *TAG = "NOTIFY_STATUS";
+    // The BLE stack is now synchronized and ready to run BLE operations
+    ESP_LOGI(TAG, "BLE sync completed.");
+
     while (1)
     {
         if (main_struct.isProvisioned)
@@ -442,6 +461,7 @@ void mac_to_string(uint8_t *mac, char *mac_str) {
 // BLE sync callback function
 void ble_app_on_sync(void)
 {
+    char *TAG = "BLE_SYNC";
     // The BLE stack is now synchronized and ready to run BLE operations
     ESP_LOGI(TAG, "BLE sync completed.");
 
@@ -474,20 +494,22 @@ void ble_app_on_sync(void)
 }
 
 void ble_advert(void){
-        ESP_LOGI(TAG, "Starting BLE advertising for provisioning...");
-        // Initialize NimBLE host stack
-        nimble_port_init();                        // 3 - Initialize the host stack
-        //ble_svc_gap_device_name_set("BLE-Server"); // 4 - Initialize NimBLE configuration - server name
-        ble_svc_gap_init();                        // 4 - Initialize NimBLE configuration - gap service
-        ble_svc_gatt_init();                       // 4 - Initialize NimBLE configuration - gatt service
-        ble_gatts_count_cfg(gatt_svcs);            // 4 - Initialize NimBLE configuration - config gatt services
-        ble_gatts_add_svcs(gatt_svcs);             // 4 - Initialize NimBLE configuration - queues gatt services.
-        ble_hs_cfg.sync_cb = ble_app_on_sync;      // 5 - Initialize application
+    char *TAG = "BLE_ADVERT";
+    ESP_LOGI(TAG, "Starting BLE advertising for provisioning...");
+    // Initialize NimBLE host stack
+    nimble_port_init();                        // 3 - Initialize the host stack
+    //ble_svc_gap_device_name_set("BLE-Server"); // 4 - Initialize NimBLE configuration - server name
+    ble_svc_gap_init();                        // 4 - Initialize NimBLE configuration - gap service
+    ble_svc_gatt_init();                       // 4 - Initialize NimBLE configuration - gatt service
+    ble_gatts_count_cfg(gatt_svcs);            // 4 - Initialize NimBLE configuration - config gatt services
+    ble_gatts_add_svcs(gatt_svcs);             // 4 - Initialize NimBLE configuration - queues gatt services.
+    ble_hs_cfg.sync_cb = ble_app_on_sync;      // 5 - Initialize application
 
-        // Start NimBLE host task thread and return 
-        xTaskCreate(nimble_host_task, "PlantPulse", 4 * 1024, NULL, 5, NULL);
-        // Task entry log 
-        ESP_LOGI(TAG, "NimBLE host task has been started!");
+
+    // Start NimBLE host task thread and return 
+    xTaskCreate(nimble_host_task, "PlantPulse", 4 * 1024, NULL, 5, NULL);
+    // Task entry log 
+    ESP_LOGI(TAG, "NimBLE host task has been started!");
 
 }
 
@@ -511,7 +533,6 @@ void enter_deep_sleep(SleepDuration duration)
     esp_deep_sleep_start();
 }
 
-
 // Main application entry point
 void app_main() {
     char *TAG = "MAIN";
@@ -522,7 +543,7 @@ void app_main() {
     adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
 
     nvs_init();
-    read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, &main_struct.credentials_recv);
+    read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, &main_struct.credentials_recv);
 
     ESP_LOGI("NVS", "SSID: %s", main_struct.ssid);
     ESP_LOGI("NVS", "Password: %s", main_struct.password);
@@ -539,7 +560,7 @@ void app_main() {
 
     // Start a task to monitor the button press
     xTaskCreate(monitor_button_press, "monitor_button_press", 2 * 1024, NULL, 5, NULL);
-    //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
+    xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
 }
 
 }
