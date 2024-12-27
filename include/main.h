@@ -12,6 +12,7 @@ typedef struct
     char location[32];
     uint8_t credentials_recv;
     char hostname[13];
+    char apiToken[64];
 
     float battery_data;
 } main_struct_t;
