@@ -147,7 +147,7 @@ static int device_read(uint16_t con_handle, uint16_t attr_handle, struct ble_gat
 static const struct ble_gatt_svc_def gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,  // Primary service type
-        .uuid = BLE_UUID16_DECLARE(0x1800), // Service UUID (Custom UUID for device type)
+        .uuid = BLE_UUID16_DECLARE(SERVICE_CHR_UUID), // Service UUID (Custom UUID for device type)
         .characteristics = (struct ble_gatt_chr_def[]){
             {
                 .uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // SSID characteristic
@@ -259,25 +259,16 @@ void ble_app_advertise(void) {
     uint8_t name_len = strlen(device_name) + 1;  // +1 for the 0x09 type byte
     advertising_data[len++] = name_len;          // Length of the name
     advertising_data[len++] = 0x09;              // Type: Complete Local Name
+memcpy(&advertising_data[len], device_name, name_len);
+    len += name_len;
 
-    // Copy the device name into the advertising data
-    memcpy(&advertising_data[len], device_name, strlen(device_name));
-    len += strlen(device_name);
-    
+    // Add 16-bit UUID
+    advertising_data[len++] = 3;  // Length of UUID field (1 byte for type + 2 bytes for UUID)
+    advertising_data[len++] = 0x03; // Type: 16-bit UUIDs
 
-    // Add 16-bit UUIDs
-    uint8_t uuids[] = {BLE_UUID16_DECLARE(SSID_CHR_UUID)};
-    uint8_t num_uuids = sizeof(uuids) / sizeof(uuids[0]);
-
-    // Add length for UUIDs (2 bytes per UUID, plus 1 byte for the type)
-    advertising_data[len++] = 1 + (num_uuids * 2);  // Length of the UUID data
-    advertising_data[len++] = 0x03;  // Type: 16-bit UUIDs
-
-    // Add the UUIDs (2 bytes per UUID, little-endian format)
-    for (int i = 0; i < num_uuids; i++) {
-        advertising_data[len++] = (uint8_t)(uuids[i] & 0xFF);    // Low byte
-        advertising_data[len++] = (uint8_t)((uuids[i] >> 8) & 0xFF); // High byte
-    }
+    // Add SERVICE_CHR_UUID (little-endian)
+    advertising_data[len++] = (uint8_t)(SERVICE_CHR_UUID & 0xFF);
+    advertising_data[len++] = (uint8_t)((SERVICE_CHR_UUID >> 8) & 0xFF);
 
 
     // Set the advertising data
