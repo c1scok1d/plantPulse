@@ -540,6 +540,7 @@ void app_main() {
     ESP_LOGI("NVS", "Password: %s", main_struct.password);
     ESP_LOGI("NVS", "Name: %s", main_struct.name);
     ESP_LOGI("NVS", "Location: %s", main_struct.location);
+    ESP_LOGI("NVS", "API key: %s", main_struct.apiToken);
     ESP_LOGI("NVS", "Credentials Received: %d", main_struct.credentials_recv);
 
     // Only initialize BLE if credentials are NOT set
