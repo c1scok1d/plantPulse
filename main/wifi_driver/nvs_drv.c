@@ -82,12 +82,12 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
     // Close the handle
     nvs_close(nvs_handle);
 
-    printf("NVS stored ssid %s\n", ssid);
+    /*printf("NVS stored ssid %s\n", ssid);
     printf("NVS stored password %s\n", password);
     printf("NVS stored name %s\n", name);
     printf("NVS stored location %s\n", location);
     printf("NVS stored wifi_value %d\n", value);
-    printf("NVS stored apiToken %s\n", apiToken);
+    printf("NVS stored apiToken %s\n", apiToken);*/
 
 
     return err;
