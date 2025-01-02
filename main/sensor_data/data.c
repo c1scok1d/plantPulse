@@ -230,13 +230,13 @@ void monitor()
     vTaskDelay(pdMS_TO_TICKS(3000));  
     
     // Sleep for 30 seconds
-    enter_deep_sleep(FIVE_MIN_SLEEP);
+    //enter_deep_sleep(FIVE_MIN_SLEEP);
 
     // Sleep for 1 hour
     //enter_deep_sleep(SLEEP_1_HOUR);
 
     // Sleep for 8 hours
-    //enter_deep_sleep(SLEEP_8_HOURS);
+    enter_deep_sleep(EIGHT_HOUR_SLEEP);
 
     // Sleep for 24 hours
     //enter_deep_sleep(SLEEP_24_HOURS);
