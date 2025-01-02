@@ -23,6 +23,9 @@
 #include "driver/gpio.h"
 #include "esp_rom_gpio.h" 
 #include "esp_sleep.h"
+#include "esp_system.h"
+#include "esp_log.h"
+#include "esp_mac.h"  // Include the correct header for esp_read_mac
 
 #define SERVICE_CHR_UUID 0xFEF3
 #define SSID_CHR_UUID 0xFEF4
@@ -30,7 +33,8 @@
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
 #define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
 #define API_TOKEN_UUID 0xFEF8
-#define PROV_STATUS_UUID 0xDEAD
+#define HOSTNAME_UUID 0xFEF9
+//#define PROV_STATUS_UUID 0xDEAD
 #define MANUFACTURER_NAME "Rodland Farms"
 // Define GPIO pin for the button
 #define BUTTON_GPIO 6
@@ -44,6 +48,8 @@ static bool ssid_pswd_flag[2] = {
 uint8_t ble_addr_type;
 uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t prov_status_attr_handle = 0;
+// Global variable for characteristic handle
+uint16_t hostname_attr_handle;
 
 main_struct_t main_struct = {.credentials_recv = 0, .isProvisioned = false};
 
@@ -75,7 +81,25 @@ void notify_prov_status(uint8_t status_data)
         ESP_LOGW(TAG, "No connected client to notify");
     }
 }
+void get_wifi_mac_address()
+{
+    #define MAX_HOSTNAME_LEN 32  // Set this to the maximum hostname length allowed
+    uint8_t mac[6]; // Array to store the MAC address
+    esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA); // Read the MAC address for the Wi-Fi station interface
+    // set hostname to the MAC address to a string without colons
 
+    if (err == ESP_OK) {
+        snprintf(main_struct.hostname, MAX_HOSTNAME_LEN, "%02X%02X%02X%02X%02X%02X",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        /*ESP_LOGI("MAC", "Wi-Fi MAC Address: %02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);*/
+        ESP_LOGI("HOSTNAME", "hostname: %02X%02X%02X%02X%02X%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        ESP_LOGE("MAC", "Failed to read Wi-Fi MAC address: %s", esp_err_to_name(err));
+    }
+}
 // Write data to ESP32 defined as server
 static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -134,13 +158,24 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 }
 
 // Read data from ESP32 defined as server
-static int device_read(uint16_t con_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
+static int device_read(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    /* uint32_t status_data = main_struct.isProvisioned ? 1 : 0; // Example: 1 = provisioned, 0 = not provisioned
-     os_mbuf_append(ctxt->om, &status_data, sizeof(status_data));
-     ESP_LOGI(TAG, "BLE Read: Provisioning Status - %u", status_data);*/
+    // Check the attribute handle and decide what to send
+    if (attr_handle == prov_status_attr_handle) {
+        os_mbuf_append(ctxt->om, main_struct.isProvisioned, sizeof(main_struct.isProvisioned));
+        ESP_LOGI("BLE", "BLE Read: Provisioning Status - %u", main_struct.isProvisioned);
+    } 
+    if (attr_handle == hostname_attr_handle) {
+        os_mbuf_append(ctxt->om, main_struct.hostname, strlen(main_struct.hostname));
+        ESP_LOGI("BLE", "BLE Read: Hostname - %s", main_struct.hostname);
+    } else {
+        ESP_LOGE("BLE", "BLE Read: Unknown attribute handle");
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
     return 0; // Success
 }
+
 
 
 // Array of pointers to other service definitions
@@ -175,16 +210,58 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .access_cb = device_write,      // Write callback
             },
             {
+                .uuid = BLE_UUID16_DECLARE(HOSTNAME_UUID),
+                .access_cb = device_read,
+                .val_handle = &hostname_attr_handle, // Assign handle
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+            },
+           /* {
                 .uuid = BLE_UUID16_DECLARE(PROV_STATUS_UUID), // Define UUID for reading
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                 .access_cb = device_read,
                 .val_handle = &prov_status_attr_handle
-            },
+            },*/
             {0} // Terminating the characteristics array
         }
     },
     {0} // Terminating the services array
 };
+
+// Function to send a notification
+static void send_hostname()
+{
+    struct os_mbuf *om;
+
+    // Allocate memory for the message
+    om = ble_hs_mbuf_from_flat(main_struct.hostname, strlen(main_struct.hostname));
+    if (!om)
+    {
+        ESP_LOGE("BLE", "Failed to allocate memory for notification");
+        return;
+    }
+
+    // Ensure connection handle and attribute handle are valid before sending the notification
+    if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE || hostname_attr_handle == 0)
+    {
+        ESP_LOGE("BLE", "Invalid connection or attribute handle.");
+        os_mbuf_free_chain(om); // Free allocated memory
+        return;
+    }
+
+    // Send notification
+    int rc = ble_gattc_notify_custom(g_conn_handle, hostname_attr_handle, om);
+    if (rc != 0)
+    {
+        ESP_LOGE("BLE", "Failed to send notification, error: %d", rc);
+    }
+    else
+    {
+        ESP_LOGI("BLE", "Notification sent: %s", main_struct.hostname);
+    }
+
+    // Free the memory after sending
+    os_mbuf_free_chain(om);
+}
 
 
 // BLE event handling
@@ -196,12 +273,17 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
 
         ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
-        if (event->connect.status == 0)
+        if (event->connect.status == 0) {
             g_conn_handle = event->connect.conn_handle;
-        else if (event->connect.status != 0)
+            ESP_LOGI("BLE", "Connection handle: %d", g_conn_handle);
+            get_wifi_mac_address();
+            send_hostname();
+        } else {
             ble_advert();
+        }
 
         break;
+
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "CONNECTED!" : "DISCONNECTED!");
         ESP_LOGI("GAP", "Rebooting...");
@@ -259,7 +341,7 @@ void ble_app_advertise(void) {
     uint8_t name_len = strlen(device_name) + 1;  // +1 for the 0x09 type byte
     advertising_data[len++] = name_len;          // Length of the name
     advertising_data[len++] = 0x09;              // Type: Complete Local Name
-memcpy(&advertising_data[len], device_name, name_len);
+    memcpy(&advertising_data[len], device_name, name_len);
     len += name_len;
 
     // Add 16-bit UUID
@@ -532,6 +614,8 @@ void app_main() {
     // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation
     adc1_config_width(ADC_WIDTH_BIT_12);  // Set ADC width to 12 bits (0-4095 range)
     adc1_config_channel_atten(ADC1_CHANNEL_4, ADC_ATTEN_DB_11);  // Set ADC attenuation to 11dB (0-3.6V range)
+    // Start a task to monitor the button press
+    xTaskCreate(monitor_button_press, "monitor_button_press", 2 * 1024, NULL, 5, NULL);
 
     nvs_init();
     read_from_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, &main_struct.credentials_recv);
@@ -550,9 +634,7 @@ void app_main() {
     ESP_LOGI(TAG, "Wi-Fi credentials already set. Skipping BLE provisioning.");
     xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
 
-    // Start a task to monitor the button press
-    xTaskCreate(monitor_button_press, "monitor_button_press", 2 * 1024, NULL, 5, NULL);
-    xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
+    //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
 }
 
 }
