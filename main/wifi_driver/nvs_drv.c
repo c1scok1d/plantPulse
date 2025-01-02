@@ -82,6 +82,14 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
     // Close the handle
     nvs_close(nvs_handle);
 
+    printf("NVS stored ssid %s\n", ssid);
+    printf("NVS stored password %s\n", password);
+    printf("NVS stored name %s\n", name);
+    printf("NVS stored location %s\n", location);
+    printf("NVS stored wifi_value %d\n", value);
+    printf("NVS stored apiToken %s\n", apiToken);
+
+
     return err;
 }
 
@@ -93,7 +101,7 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
     size_t pass_len = 64;
     size_t name_len = 32;
     size_t location_len = 64;
-    size_t apiToken_len = 128;
+    size_t apiToken_len = 64;
     // Open NVS handle
     err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK)
@@ -171,7 +179,7 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
         ESP_LOGW("NVS", "Device location not found. Setting default value.");
-        err = nvs_set_str(nvs_handle, "location", "Set Device Location");
+        err = nvs_set_str(nvs_handle, "location", "Set Device");
         if (err != ESP_OK)
         {
             ESP_LOGE("NVS", "Failed to set default device location!");
