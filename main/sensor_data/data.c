@@ -54,7 +54,7 @@ esp_err_t i2c_master_init() {
 #define BATTERY_I2C_ADDR 0x36  // I2C address of the battery monitoring IC
 #define BATTERY_VOLTAGE_REG 0x02  // Hypothetical register address for battery voltage
 
-esp_err_t read_battery_voltage(float *battery_voltage) {
+esp_err_t read_battery_voltage(float *battery_voltage, float *battery_percentage) {
     uint8_t data[2];  // Buffer to store the I2C data
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
@@ -75,17 +75,14 @@ esp_err_t read_battery_voltage(float *battery_voltage) {
         // Combine the two bytes read from the register (assuming 16-bit battery voltage)
         uint16_t raw_voltage = (data[0] << 8) | data[1];
         *battery_voltage = raw_voltage * (4.2 / 4095);  // Adjust this based on your battery IC's datasheet
-        
-        // Log the battery voltage
-        ESP_LOGI("Battery", "Battery Voltage: %.2f V", *battery_voltage);
-        
+
         // Calculate battery percentage based on 4.2V full charge and 3.2V empty
-        float battery_percentage = (*battery_voltage - 3.2) / (4.2 - 3.2) * 100;
-        battery_percentage = (battery_percentage < 0) ? 0 : (battery_percentage > 100) ? 100 : battery_percentage; // Clamp to 0-100%
-        
-        // Log the battery voltage
-        ESP_LOGI("Battery", "Battery Percentage: %.2f%%", battery_percentage);
-        
+        *battery_percentage = (*battery_voltage - 3.2) / (4.2 - 3.2) * 100;
+        *battery_percentage = (*battery_percentage < 0) ? 0 : (*battery_percentage > 100) ? 100 : *battery_percentage; // Clamp to 0-100%
+
+        ESP_LOGI("Battery", "Raw Voltage: %d, Battery Voltage: %.2f V, Battery Percentage: %.2f%%",
+                 raw_voltage, *battery_voltage, *battery_percentage);
+
         return ESP_OK;  // Return success
     } else {
         ESP_LOGE("I2C", "Failed to read battery voltage");
@@ -99,12 +96,16 @@ esp_err_t read_battery_voltage(float *battery_voltage) {
 float getBattery() {
     static const char *TAG = "BatterySensor";  // Logging tag
     float battery_voltage = 0.0;
+    float battery_percentage = 0.0;
 
     // Call to read the battery voltage (implement this function according to your I2C setup)
-    esp_err_t err = read_battery_voltage(&battery_voltage);  // Assume this function fills battery_voltage
+    esp_err_t err = read_battery_voltage(&battery_voltage, &battery_percentage);  // Assume this function fills battery_voltage
 
     if (err == ESP_OK) {
         // Return the battery voltage or percentage
+        // Log the battery voltage and percentage
+        ESP_LOGI(TAG, "Battery Voltage: %.2f V, Battery Percentage: %.2f%%",
+                 battery_voltage, battery_percentage);
         // Optionally, you can return battery percentage instead of voltage
         return battery_voltage;  // This can return the battery voltage directly, or you can calculate percentage here if needed
     } else {
@@ -230,13 +231,13 @@ void monitor()
     vTaskDelay(pdMS_TO_TICKS(3000));  
     
     // Sleep for 30 seconds
-    //enter_deep_sleep(FIVE_MIN_SLEEP);
+    enter_deep_sleep(ONE_MIN_SLEEP);
 
     // Sleep for 1 hour
     //enter_deep_sleep(SLEEP_1_HOUR);
 
     // Sleep for 8 hours
-    enter_deep_sleep(EIGHT_HOUR_SLEEP);
+    //enter_deep_sleep(EIGHT_HOUR_SLEEP);
 
     // Sleep for 24 hours
     //enter_deep_sleep(SLEEP_24_HOURS);
