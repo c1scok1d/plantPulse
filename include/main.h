@@ -17,10 +17,10 @@ typedef struct
 } main_struct_t;
 
 typedef enum {
-    SHORT_SLEEP = 10,      // 10 seconds
-    MEDIUM_SLEEP = 60,     // 1 minute
+    TEN_MINUTE_SLEEP = 10,      // 10 seconds
+    ONE_MIN_SLEEP = 60,     // 1 minute
     FIVE_MIN_SLEEP = 300,  // 5 minutes
-    LONG_SLEEP = 3600,     // 1 hour
+    ONE_HOUR_SLEEP = 3600,     // 1 hour
     EIGHT_HOUR_SLEEP = 28800  // 8 hours
 } SleepDuration;  // Enum for sleep duration options
 
