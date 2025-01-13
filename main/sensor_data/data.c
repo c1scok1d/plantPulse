@@ -107,7 +107,7 @@ float getBattery() {
         ESP_LOGI(TAG, "Battery Voltage: %.2f V, Battery Percentage: %.2f%%",
                  battery_voltage, battery_percentage);
         // Optionally, you can return battery percentage instead of voltage
-        return battery_voltage;  // This can return the battery voltage directly, or you can calculate percentage here if needed
+        return battery_percentage;  // This can return the battery voltage directly, or you can calculate percentage here if needed
     } else {
         // Error handling: Log the error and return a value indicating failure
         ESP_LOGE(TAG, "Error reading battery voltage: %s", esp_err_to_name(err));
@@ -125,7 +125,7 @@ int readMoisture() {
     reading = adc1_get_raw(ADC1_CHANNEL_4);  // Get the raw ADC value
 
     // Map the ADC raw value to a percentage (0-100)
-    int moisture = map(reading, 4095, 0, 0, 100);
+    int moisture = map(reading, 3600, 2130, 0, 100);
 
     // Log the raw ADC reading and calculated moisture percentage
     ESP_LOGI(TAG, "Raw ADC Reading: %d, Moisture: %d%%", reading, moisture);
@@ -153,6 +153,13 @@ void uploadReadingsTask(void *param)
     const char *serverName = "http://athome.rodlandfarms.com";
     const char *server_path = "/api/esp/data?";
     const char* apiKey = "ijYCm00T79FzzGNGkghmUFXLRzSQTIPaNpT01zHoWvrKhlWU5x6qyzvi9aPr";
+
+    // Clamp the moisture value to the range [0, 100]
+    if (data->moisture > 100) {
+        data->moisture = 100;
+    } else if (data->moisture < 0) {
+        data->moisture = 0;
+    }
 
     // Construct the server URI
     char server_uri[256];
@@ -227,10 +234,10 @@ void monitor()
     // Upload data
     uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
 
-    // Delay for 5 seconds
+    // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));  
     
-    // Sleep for 30 seconds
+    // Sleep for 1 minute
     //enter_deep_sleep(ONE_MIN_SLEEP);
 
     // Sleep for 1 hour
@@ -239,6 +246,6 @@ void monitor()
     // Sleep for 8 hours
     //enter_deep_sleep(EIGHT_HOUR_SLEEP);
 
-    // Sleep for 24 hours
-    //enter_deep_sleep(SLEEP_24_HOURS);
+    // Sleep for 12 hours
+    //enter_deep_sleep(TWELEVE_HOUR_SLEEP);
 }
