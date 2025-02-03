@@ -14,105 +14,107 @@
 #include "sntp.h" 
 
 static const char *TAG = "DATA";
-#define I2C_MASTER_SDA_IO    16      // GPI016 is SDA
-#define I2C_MASTER_SCL_IO    17       // GPI017 is SCL
-#define I2C_MASTER_NUM        I2C_NUM_0
-#define I2C_MASTER_FREQ_HZ    100000 // I2C frequency (100 kHz)
-#define I2C_MASTER_TX_BUF_DISABLE 0
-#define I2C_MASTER_RX_BUF_DISABLE 0
-
-
-//#define SLEEP_DURATION_SEC 86400 // 24 hours in seconds
 
 // Map function (equivalent to Arduino's map function)
 int map(int x, int in_min, int in_max, int out_min, int out_max) {
+    if (in_min == in_max) return out_min; // Avoid division by zero
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
-esp_err_t i2c_master_init() {
+
+
+
+#define I2C_MASTER_SCL_IO  17    // SCL pin
+#define I2C_MASTER_SDA_IO  16    // SDA pin
+#define I2C_MASTER_FREQ_HZ 100000 // I2C frequency
+#define I2C_MASTER_NUM I2C_NUM_0 // I2C port number
+
+#define MAX17048_ADDR  0x36  // MAX17048 I2C address
+#define REG_VCELL      0x02  // Voltage register
+#define REG_SOC        0x04  // SOC register
+#define REG_STATUS     0x00  // Status register
+
+// Function to initialize I2C
+static void i2c_master_init(void) {
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = I2C_MASTER_SDA_IO,
         .scl_io_num = I2C_MASTER_SCL_IO,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ
     };
-
-    esp_err_t err = i2c_param_config(I2C_MASTER_NUM, &conf);
-    if (err != ESP_OK) {
-        ESP_LOGE("I2C", "Failed to configure I2C parameters");
-        return err;
-    }
-
-    err = i2c_driver_install(I2C_MASTER_NUM, I2C_MODE_MASTER, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE("I2C", "Failed to install I2C driver");
-    }
-    return err;
+    i2c_param_config(I2C_MASTER_NUM, &conf);
+    i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
 }
 
-#define BATTERY_I2C_ADDR 0x36  // I2C address of the battery monitoring IC
-#define BATTERY_VOLTAGE_REG 0x02  // Hypothetical register address for battery voltage
+// Function to read a 16-bit register from MAX17048
+static uint16_t max17048_read_register(uint8_t reg) {
+    uint8_t data[2];  // Data buffer to hold 2 bytes
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();  // Create I2C command handle
 
-esp_err_t read_battery_voltage(float *battery_voltage, float *battery_percentage) {
-    uint8_t data[2];  // Buffer to store the I2C data
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    // Start the I2C communication
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_WRITE, true);  // Write address with write flag
+    i2c_master_write_byte(cmd, reg, true);  // Specify the register to read
 
-    // Start I2C communication
+    // Restart to switch to I2C read mode
     i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (BATTERY_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, BATTERY_VOLTAGE_REG, true);
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (BATTERY_I2C_ADDR << 1) | I2C_MASTER_READ, true);
-    i2c_master_read(cmd, data, 2, I2C_MASTER_LAST_NACK);
+    i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_READ, true);  // Switch to read mode
+    i2c_master_read_byte(cmd, &data[0], I2C_MASTER_ACK);  // Read the first byte (MSB)
+    i2c_master_read_byte(cmd, &data[1], I2C_MASTER_NACK);  // Read the second byte (LSB)
+    
+    // End the I2C communication
     i2c_master_stop(cmd);
+    i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_PERIOD_MS);  // Execute the I2C command
+    i2c_cmd_link_delete(cmd);  // Delete the I2C command handle to free resources
 
-    // Execute the I2C command
-    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(1000));
-    i2c_cmd_link_delete(cmd);
-
-   if (ret == ESP_OK) {
-        // Combine the two bytes read from the register (assuming 16-bit battery voltage)
-        uint16_t raw_voltage = (data[0] << 8) | data[1];
-        *battery_voltage = raw_voltage * (4.2 / 4095);  // Adjust this based on your battery IC's datasheet
-
-        // Calculate battery percentage based on 4.2V full charge and 3.2V empty
-        *battery_percentage = (*battery_voltage - 3.2) / (4.2 - 3.2) * 100;
-        *battery_percentage = (*battery_percentage < 0) ? 0 : (*battery_percentage > 100) ? 100 : *battery_percentage; // Clamp to 0-100%
-
-        ESP_LOGI("Battery", "Raw Voltage: %d, Battery Voltage: %.2f V, Battery Percentage: %.2f%%",
-                 raw_voltage, *battery_voltage, *battery_percentage);
-
-        return ESP_OK;  // Return success
-    } else {
-        ESP_LOGE("I2C", "Failed to read battery voltage");
-        return ret;  // Return the error from I2C communication
-    }
+    // Combine the two bytes to form the 16-bit result
+    return (data[0] << 8) | data[1];  // Return as 16-bit value (MSB first)
 }
 
 
+static void max17048_check_status() {
+    uint16_t status = max17048_read_register(REG_STATUS);
+    
+    // Check if the battery is inserted
+    bool battery_inserted = status & (1 << 9);  // Bit 9: BI (Battery Inserted)
+
+    if (battery_inserted) {
+        printf("Battery is inserted.\n");
+    } else {
+        printf("Battery is NOT inserted. Using USB power.\n");
+    }
+
+    // If no battery is inserted, don't process battery voltage/SOC
+    if (!battery_inserted) {
+        printf("No battery detected, voltage and SOC are invalid.\n");
+        return;
+    }
+
+    // Otherwise, continue with reading the battery status
+    // Check voltage and SOC (as before)
+    uint16_t vcell_raw = max17048_read_register(REG_VCELL);
+    float voltage = (vcell_raw >> 4) * 1.25 / 1000; // Convert to volts
+    printf("Measured Battery Voltage: %.3fV\n", voltage);
+
+    uint16_t soc_raw = max17048_read_register(REG_SOC);
+    float soc = soc_raw / 256.0; // Convert to percentage
+    printf("State of Charge: %.2f%%\n", soc);
+}
 
 // Function to read battery voltage
 float getBattery() {
     static const char *TAG = "BatterySensor";  // Logging tag
-    float battery_voltage = 0.0;
-    float battery_percentage = 0.0;
 
-    // Call to read the battery voltage (implement this function according to your I2C setup)
-    esp_err_t err = read_battery_voltage(&battery_voltage, &battery_percentage);  // Assume this function fills battery_voltage
+    // Read the battery status to check if a battery is inserted
+    // If battery is present, continue to read battery voltage and SOC
+    max17048_check_status();
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Delay for 2 seconds
 
-    if (err == ESP_OK) {
-        // Return the battery voltage or percentage
-        // Log the battery voltage and percentage
-        ESP_LOGI(TAG, "Battery Voltage: %.2f V, Battery Percentage: %.2f%%",
-                 battery_voltage, battery_percentage);
-        // Optionally, you can return battery percentage instead of voltage
-        return battery_percentage;  // This can return the battery voltage directly, or you can calculate percentage here if needed
-    } else {
-        // Error handling: Log the error and return a value indicating failure
-        ESP_LOGE(TAG, "Error reading battery voltage: %s", esp_err_to_name(err));
-        return 0.0;  // Return a failure value (e.g., 0.0 V or 0% to indicate failure)
-    }
+    uint16_t soc_raw = max17048_read_register(REG_SOC);
+    float soc = soc_raw / 256.0; // Convert to percentage
+    
+    return soc;
 }
 
 // Function to read moisture level
@@ -131,9 +133,6 @@ int readMoisture() {
     ESP_LOGI(TAG, "Raw ADC Reading: %d, Moisture: %d%%", reading, moisture);
 
     return moisture;
-
-
-    //vTaskDelete(NULL);  // Delete task when done
 }
 
 // Function to send data to the server in a FreeRTOS task
@@ -220,15 +219,10 @@ void uploadReadings(int moisture, float battery, const char* hostname, const cha
 
 void monitor()
 {
-    //int count = 0;
-    esp_err_t err = i2c_master_init();
+    i2c_master_init();
 
-    if (err != ESP_OK) {
-        ESP_LOGE("I2C", "I2C initialization failed");
-        return;
-    }
     // Read battery and moisture data
-    float battery = getBattery(err);
+    float battery = getBattery();
     int moisture = readMoisture();
 
     // Upload data
