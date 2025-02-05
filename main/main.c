@@ -27,12 +27,14 @@
 #include "esp_log.h"
 #include "esp_mac.h"  // Include the correct header for esp_read_mac
 
+#define JSON_CONFIG_UUID 0xFEFA  // UUID for JSON data
+
 #define SERVICE_CHR_UUID 0xFEF3
-#define SSID_CHR_UUID 0xFEF4
+/*#define SSID_CHR_UUID 0xFEF4
 #define PASS_CHR_UUID 0xFEF5
 #define NAME_CHR_UUID 0xFEF6  // Example UUID for sensorName
 #define LOCATION_CHR_UUID 0xFEF7  // Example UUID for sensorLocation
-#define API_TOKEN_UUID 0xFEF8
+#define API_TOKEN_UUID 0xFEF8*/
 #define HOSTNAME_UUID 0xFEF9
 //#define PROV_STATUS_UUID 0xDEAD
 #define MANUFACTURER_NAME "Rodland Farms"
@@ -42,9 +44,9 @@
 
 char *TAG = "-";
 
-static bool ssid_pswd_flag[2] = {
+/*static bool ssid_pswd_flag[2] = {
     false,
-};
+};*/
 uint8_t ble_addr_type;
 uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t prov_status_attr_handle = 0;
@@ -101,12 +103,50 @@ void get_wifi_mac_address()
     }
 }
 // Write data to ESP32 defined as server
-static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
+static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg){
     char *TAG = "WRITE";
     switch (ble_uuid_u16(ctxt->chr->uuid))
     {
-    case SSID_CHR_UUID:
+
+    case JSON_CONFIG_UUID:
+        // Convert received data to a null-terminated string
+        char json_str[256] = {0}; // Ensure enough space
+        strncpy(json_str, (char *)ctxt->om->om_data, ctxt->om->om_len);
+        json_str[ctxt->om->om_len] = '\0';
+
+        ESP_LOGI(TAG, "Received JSON: %s", json_str);
+
+        // Parse JSON
+        cJSON *root = cJSON_Parse(json_str);
+        if (!root) {
+            ESP_LOGE(TAG, "JSON Parsing Failed");
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        // Extract values from JSON
+        cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
+        cJSON *password = cJSON_GetObjectItem(root, "password");
+        cJSON *name = cJSON_GetObjectItem(root, "sensor_name");
+        cJSON *location = cJSON_GetObjectItem(root, "sensor_location");
+        cJSON *api_token = cJSON_GetObjectItem(root, "api_token");
+
+        if (ssid && password && name && location && api_token) {
+            strncpy(main_struct.ssid, ssid->valuestring, sizeof(main_struct.ssid));
+            strncpy(main_struct.password, password->valuestring, sizeof(main_struct.password));
+            strncpy(main_struct.name, name->valuestring, sizeof(main_struct.name));
+            strncpy(main_struct.location, location->valuestring, sizeof(main_struct.location));
+            strncpy(main_struct.apiToken, api_token->valuestring, sizeof(main_struct.apiToken));
+
+            ESP_LOGI(TAG, "Parsed Data: SSID=%s, Name=%s, Location=%s", main_struct.ssid, main_struct.name, main_struct.location);
+
+            // Save to NVS
+            save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, true);
+        }
+
+        cJSON_Delete(root); // Free JSON object
+        break;
+
+    /*case SSID_CHR_UUID:
         ssid_pswd_flag[0] = true;
         strncpy(main_struct.ssid, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.ssid[ctxt->om->om_len] = '\0';
@@ -139,20 +179,20 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         strncpy(main_struct.apiToken, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.apiToken[ctxt->om->om_len] = '\0';
         ESP_LOGI(TAG, "Received Device API Token: %s", main_struct.apiToken);
-        break;
+        break;*/
 
     default:
         ESP_LOGW(TAG, "Unknown characteristic written.");
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    if (ssid_pswd_flag[0] && ssid_pswd_flag[1]) // ssid and password received
+    /*if (ssid_pswd_flag[0] && ssid_pswd_flag[1]) // ssid and password received
     {
 
         main_struct.credentials_recv = true;
 
         save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, main_struct.credentials_recv);
-        }
+        }*/
 
     return 0;
 }
@@ -184,7 +224,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,  // Primary service type
         .uuid = BLE_UUID16_DECLARE(SERVICE_CHR_UUID), // Service UUID (Custom UUID for device type)
         .characteristics = (struct ble_gatt_chr_def[]){
-            {
+            /*{
                 .uuid = BLE_UUID16_DECLARE(SSID_CHR_UUID), // SSID characteristic
                 .flags = BLE_GATT_CHR_F_WRITE, // Write access only
                 .access_cb = device_write      // Write callback
@@ -208,19 +248,18 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .uuid = BLE_UUID16_DECLARE(API_TOKEN_UUID), // Define UUID for reading
                 .flags = BLE_GATT_CHR_F_WRITE, // Write access only
                 .access_cb = device_write,      // Write callback
-            },
+            },*/
             {
                 .uuid = BLE_UUID16_DECLARE(HOSTNAME_UUID),
                 .access_cb = device_read,
                 .val_handle = &hostname_attr_handle, // Assign handle
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
-           /* {
-                .uuid = BLE_UUID16_DECLARE(PROV_STATUS_UUID), // Define UUID for reading
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-                .access_cb = device_read,
-                .val_handle = &prov_status_attr_handle
-            },*/
+            {
+                .uuid = BLE_UUID16_DECLARE(JSON_CONFIG_UUID),
+                .flags = BLE_GATT_CHR_F_WRITE,
+                .access_cb = device_write,
+            },
             {0} // Terminating the characteristics array
         }
     },
