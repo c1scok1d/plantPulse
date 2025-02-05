@@ -145,19 +145,21 @@ void uploadReadingsTask(void *param)
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
+        const char* apiToken;
     } upload_data_t;
     
     upload_data_t *data = (upload_data_t *)param;
 
     const char *serverName = "http://athome.rodlandfarms.com";
     const char *server_path = "/api/esp/data?";
-    const char* apiKey = "ijYCm00T79FzzGNGkghmUFXLRzSQTIPaNpT01zHoWvrKhlWU5x6qyzvi9aPr";
+    const char* apiToken = "gS6gy56jcnE4Bh9ffcOgbsv8RbKuUQZqRrDCxuBu7ck2Moakxj0SJXH59ye0";
 
-    // Clamp the moisture value to the range [0, 100]
+    // Clamp the moisture and battery value to the range [0, 100]
     if (data->moisture > 100) {
         data->moisture = 100;
-    } else if (data->moisture < 0) {
-        data->moisture = 0;
+    } 
+    if (data->battery > 100) {
+        data->battery = 100;
     }
 
     // Construct the server URI
@@ -168,7 +170,7 @@ void uploadReadingsTask(void *param)
     char httpRequestData[512];
     snprintf(httpRequestData, sizeof(httpRequestData),
              "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f",
-             apiKey, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery);
+             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery);
 
     // Send the POST request
     int httpResponseCode = POST(server_uri, httpRequestData);
@@ -187,7 +189,7 @@ void uploadReadingsTask(void *param)
     vTaskDelete(NULL);
 }
 
-void uploadReadings(int moisture, float battery, const char* hostname, const char* sensorName, const char* sensorLocation)
+void uploadReadings(int moisture, float battery, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
 {
     // Create a structure to pass the data to the task
     typedef struct {
@@ -196,6 +198,7 @@ void uploadReadings(int moisture, float battery, const char* hostname, const cha
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
+        const char* apiToken;
     } upload_data_t;
 
     // Allocate memory for the data structure
@@ -211,6 +214,7 @@ void uploadReadings(int moisture, float battery, const char* hostname, const cha
     data->hostname = hostname;
     data->sensorName = sensorName;
     data->sensorLocation = sensorLocation;
+    data->apiToken = apiToken;
 
     // Create a FreeRTOS task to upload the readings
     xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
@@ -226,7 +230,7 @@ void monitor()
     int moisture = readMoisture();
 
     // Upload data
-    uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location);
+    uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));  

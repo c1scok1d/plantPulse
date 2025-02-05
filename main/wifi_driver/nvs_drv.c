@@ -5,8 +5,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 
-esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *location, char *apiToken, uint8_t value)
-{
+esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *location, char *apiToken, uint8_t value){
     nvs_handle_t nvs_handle;
     esp_err_t err;
 
@@ -26,6 +25,7 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
         nvs_close(nvs_handle);
         return err;
     }
+    printf("NVS stored ssid %s\n", ssid);
 
     // Save Password
     err = nvs_set_str(nvs_handle, "password", password);
@@ -35,6 +35,7 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
         nvs_close(nvs_handle);
         return err;
     }
+    printf("NVS stored password %s\n", password);
 
     // Save Name
     err = nvs_set_str(nvs_handle, "name", name);
@@ -44,6 +45,7 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
         nvs_close(nvs_handle);
         return err;
     }
+    printf("NVS stored name %s\n", name);
 
     // Save Location
     err = nvs_set_str(nvs_handle, "location", location);
@@ -53,6 +55,7 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
         nvs_close(nvs_handle);
         return err;
     }
+    printf("NVS stored location %s\n", location);
 
     // Save API Token
     err = nvs_set_str(nvs_handle, "apiToken", apiToken);
@@ -62,6 +65,8 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
         nvs_close(nvs_handle);
         return err;
     }
+    printf("NVS stored apiToken %s\n", apiToken);
+
 
     // Save uint8_t value
     err = nvs_set_u8(nvs_handle, "wifi_value", value);
@@ -71,6 +76,8 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
         nvs_close(nvs_handle);
         return err;
     }
+    printf("NVS stored wifi_value %d\n", value);
+
 
     // Commit changes
     err = nvs_commit(nvs_handle);
@@ -81,13 +88,6 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
 
     // Close the handle
     nvs_close(nvs_handle);
-
-    printf("NVS stored ssid %s\n", ssid);
-    printf("NVS stored password %s\n", password);
-    printf("NVS stored name %s\n", name);
-    printf("NVS stored location %s\n", location);
-    printf("NVS stored wifi_value %d\n", value);
-    printf("NVS stored apiToken %s\n", apiToken);
 
 
     return err;
@@ -179,7 +179,7 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
         ESP_LOGW("NVS", "Device location not found. Setting default value.");
-        err = nvs_set_str(nvs_handle, "location", "Set Device");
+        err = nvs_set_str(nvs_handle, "location", "Set Device Location");
         if (err != ESP_OK)
         {
             ESP_LOGE("NVS", "Failed to set default device location!");
@@ -200,7 +200,7 @@ esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, 
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
         ESP_LOGW("NVS", "Device API token not found. Setting default value.");
-        err = nvs_set_str(nvs_handle, "apiToken", "apiToken");
+        err = nvs_set_str(nvs_handle, "apiToken", "Set Device API Token");
         if (err != ESP_OK)
         {
             ESP_LOGE("NVS", "Failed to set default device API Token!");

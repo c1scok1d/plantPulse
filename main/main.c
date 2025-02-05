@@ -44,9 +44,9 @@
 
 char *TAG = "-";
 
-/*static bool ssid_pswd_flag[2] = {
+static bool ssid_pswd_flag[2] = {
     false,
-};*/
+};
 uint8_t ble_addr_type;
 uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t prov_status_attr_handle = 0;
@@ -103,8 +103,13 @@ void get_wifi_mac_address()
     }
 }
 // Write data to ESP32 defined as server
-static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg){
+static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
     char *TAG = "WRITE";
+    size_t len;
+    ESP_LOGI(TAG, "UUID: 0x%04x", ble_uuid_u16(ctxt->chr->uuid));
+
+
     switch (ble_uuid_u16(ctxt->chr->uuid))
     {
 
@@ -148,54 +153,60 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 
     /*case SSID_CHR_UUID:
         ssid_pswd_flag[0] = true;
-        strncpy(main_struct.ssid, (char *)ctxt->om->om_data, ctxt->om->om_len);
-        main_struct.ssid[ctxt->om->om_len] = '\0';
+        len = (ctxt->om->om_len < sizeof(main_struct.ssid) - 1) ? ctxt->om->om_len : sizeof(main_struct.ssid) - 1;
+        strncpy(main_struct.ssid, (char *)ctxt->om->om_data, len);
+        main_struct.ssid[len] = '\0';
         ESP_LOGI(TAG, "Received SSID: %s", main_struct.ssid);
         break;
 
     case PASS_CHR_UUID:
         ssid_pswd_flag[1] = true;
-        strncpy(main_struct.password, (char *)ctxt->om->om_data, ctxt->om->om_len);
-        main_struct.password[ctxt->om->om_len] = '\0';
+        len = (ctxt->om->om_len < sizeof(main_struct.password) - 1) ? ctxt->om->om_len : sizeof(main_struct.password) - 1;
+        strncpy(main_struct.password, (char *)ctxt->om->om_data, len);
+        main_struct.password[len] = '\0';
         ESP_LOGI(TAG, "Received Password: %s", main_struct.password);
         break;
 
     case NAME_CHR_UUID:
         ssid_pswd_flag[2] = true;
-        strncpy(main_struct.name, (char *)ctxt->om->om_data, ctxt->om->om_len);
-        main_struct.name[ctxt->om->om_len] = '\0';
+        len = (ctxt->om->om_len < sizeof(main_struct.name) - 1) ? ctxt->om->om_len : sizeof(main_struct.name) - 1;
+        strncpy(main_struct.name, (char *)ctxt->om->om_data, len);
+        main_struct.name[len] = '\0';
         ESP_LOGI(TAG, "Received Device Name: %s", main_struct.name);
         break;
-    
+
     case LOCATION_CHR_UUID:
         ssid_pswd_flag[3] = true;
-        strncpy(main_struct.location, (char *)ctxt->om->om_data, ctxt->om->om_len);
-        main_struct.location[ctxt->om->om_len] = '\0';
+        len = (ctxt->om->om_len < sizeof(main_struct.location) - 1) ? ctxt->om->om_len : sizeof(main_struct.location) - 1;
+        strncpy(main_struct.location, (char *)ctxt->om->om_data, len);
+        main_struct.location[len] = '\0';
         ESP_LOGI(TAG, "Received Device Location: %s", main_struct.location);
         break;
 
     case API_TOKEN_UUID:
+        ESP_LOGI(TAG, "API_TOKEN_UUID");
+
         ssid_pswd_flag[4] = true;
         strncpy(main_struct.apiToken, (char *)ctxt->om->om_data, ctxt->om->om_len);
         main_struct.apiToken[ctxt->om->om_len] = '\0';
         ESP_LOGI(TAG, "Received Device API Token: %s", main_struct.apiToken);
-        break;*/
+        break;
 
     default:
         ESP_LOGW(TAG, "Unknown characteristic written.");
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    /*if (ssid_pswd_flag[0] && ssid_pswd_flag[1]) // ssid and password received
+    if (ssid_pswd_flag[0] && ssid_pswd_flag[1]) // ssid and password received
     {
 
         main_struct.credentials_recv = true;
-
         save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, main_struct.credentials_recv);
-        }*/
+        }
 
     return 0;
-}
+    }
+
 
 // Read data from ESP32 defined as server
 static int device_read(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -596,12 +607,13 @@ void ble_app_on_sync(void)
     ble_svc_gap_device_name_set(final_device_name);  // Set the device name
     
     ESP_LOGI(TAG, "Device BLE name set to: %s", final_device_name);
-
+    
     // Initialize services
-    ble_svc_gap_init();                        // Initialize NimBLE GAP service
-    ble_svc_gatt_init();                       // Initialize NimBLE GATT service
-    ble_gatts_count_cfg(gatt_svcs);            // Initialize NimBLE config GATT services
-    ble_gatts_add_svcs(gatt_svcs);             // Add GATT services
+    //ble_svc_gap_init();                        // Initialize NimBLE GAP service
+    //ble_svc_gatt_init();                       // Initialize NimBLE GATT service
+    //ble_gatts_count_cfg(gatt_svcs);            // Initialize NimBLE config GATT services
+    //ble_gatts_add_svcs(gatt_svcs);             // Add GATT services
+    ble_att_set_preferred_mtu(256); // Increase BLE MTU to store apitoken
     ble_app_advertise();
 }
 
@@ -610,7 +622,6 @@ void ble_advert(void){
     ESP_LOGI(TAG, "Starting BLE advertising for provisioning...");
     // Initialize NimBLE host stack
     nimble_port_init();                        // 3 - Initialize the host stack
-    //ble_svc_gap_device_name_set("BLE-Server"); // 4 - Initialize NimBLE configuration - server name
     ble_svc_gap_init();                        // 4 - Initialize NimBLE configuration - gap service
     ble_svc_gatt_init();                       // 4 - Initialize NimBLE configuration - gatt service
     ble_gatts_count_cfg(gatt_svcs);            // 4 - Initialize NimBLE configuration - config gatt services
@@ -619,7 +630,7 @@ void ble_advert(void){
 
 
     // Start NimBLE host task thread and return 
-    xTaskCreate(nimble_host_task, "PlantPulse", 4 * 1024, NULL, 5, NULL);
+    xTaskCreate(nimble_host_task, "PlantPulse", 8 * 1024, NULL, 5, NULL);
     // Task entry log 
     ESP_LOGI(TAG, "NimBLE host task has been started!");
 

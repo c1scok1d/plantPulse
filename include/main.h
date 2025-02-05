@@ -2,19 +2,18 @@
 #define MAIN_H_
 #include <stdint.h>
 
-typedef struct
-{
+typedef struct __attribute__((aligned(4))) {
     uint8_t isProvisioned;
     char ssid[32];
     char password[64];
-    // Define variables to store the sensor name and location
     char name[32];
-    char location[32];
+    char location[64];
     uint8_t credentials_recv;
-    char hostname[13];
-    char apiToken[128];
+    char hostname[32];
+    char apiToken[64];
     float battery_data;
 } main_struct_t;
+
 
 typedef enum {
     ONE_MIN_SLEEP = 60,             // 1 minute
