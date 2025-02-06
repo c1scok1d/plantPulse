@@ -103,19 +103,39 @@ static void max17048_check_status() {
 }
 
 // Function to read battery voltage
-float getBattery() {
+struct BatteryStatus {
+    float soc;
+    bool batteryInserted;
+};
+
+BatteryStatus getBattery() {
     static const char *TAG = "BatterySensor";  // Logging tag
 
-    // Read the battery status to check if a battery is inserted
-    // If battery is present, continue to read battery voltage and SOC
-    max17048_check_status();
-    vTaskDelay(pdMS_TO_TICKS(2000)); // Delay for 2 seconds
+    BatteryStatus batteryStatus = { -1.0, false }; // Default values
 
     uint16_t soc_raw = max17048_read_register(REG_SOC);
     float soc = soc_raw / 256.0; // Convert to percentage
     
-    return soc;
+    uint16_t status = max17048_read_register(REG_STATUS);
+
+    // Print the status register to verify the battery status bits
+    printf("Status Register: 0x%04x\n", status);
+    
+    // Check if the battery is inserted
+    bool battery_inserted = status & (1 << 9);  // Bit 9: BI (Battery Inserted)
+
+    batteryStatus.batteryInserted = battery_inserted;
+    if (battery_inserted) {
+        printf("Battery is inserted.\n");
+        batteryStatus.soc = soc;  // Store SOC only if battery is present
+    } else {
+        printf("Battery is NOT inserted. Using USB power.\n");
+        printf("No battery detected, voltage and SOC are invalid.\n");
+    }
+
+    return batteryStatus;
 }
+
 
 // Function to read moisture level
 int readMoisture() {
@@ -142,6 +162,7 @@ void uploadReadingsTask(void *param)
     typedef struct {
         int moisture;
         float battery;
+        bool battery_status;
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -152,7 +173,7 @@ void uploadReadingsTask(void *param)
 
     const char *serverName = "http://athome.rodlandfarms.com";
     const char *server_path = "/api/esp/data?";
-    const char* apiToken = "gS6gy56jcnE4Bh9ffcOgbsv8RbKuUQZqRrDCxuBu7ck2Moakxj0SJXH59ye0";
+    //const char* apiToken = "gS6gy56jcnE4Bh9ffcOgbsv8RbKuUQZqRrDCxuBu7ck2Moakxj0SJXH59ye0";
 
     // Clamp the moisture and battery value to the range [0, 100]
     if (data->moisture > 100) {
@@ -169,8 +190,8 @@ void uploadReadingsTask(void *param)
     // Construct the HTTP request data
     char httpRequestData[512];
     snprintf(httpRequestData, sizeof(httpRequestData),
-             "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f",
-             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery);
+             "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d",
+             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status);
 
     // Send the POST request
     int httpResponseCode = POST(server_uri, httpRequestData);
@@ -189,12 +210,13 @@ void uploadReadingsTask(void *param)
     vTaskDelete(NULL);
 }
 
-void uploadReadings(int moisture, float battery, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
+void uploadReadings(int moisture, float battery, bool battery_status, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
 {
     // Create a structure to pass the data to the task
     typedef struct {
         int moisture;
         float battery;
+        bool battery_status;
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -211,6 +233,7 @@ void uploadReadings(int moisture, float battery, const char* hostname, const cha
     // Fill the structure with the data
     data->moisture = moisture;
     data->battery = battery;
+    data->battery_status = battery_status;
     data->hostname = hostname;
     data->sensorName = sensorName;
     data->sensorLocation = sensorLocation;
@@ -226,11 +249,12 @@ void monitor()
     i2c_master_init();
 
     // Read battery and moisture data
-    float battery = getBattery();
+    BatteryStatus battery = getBattery();
+    //float battery = getBattery();
     int moisture = readMoisture();
 
     // Upload data
-    uploadReadings(moisture, battery, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
+    uploadReadings(moisture, battery.soc, battery.batteryInserted, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));  
