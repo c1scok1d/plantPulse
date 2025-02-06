@@ -93,42 +93,22 @@ void get_wifi_mac_address()
         ESP_LOGE("MAC", "Failed to read Wi-Fi MAC address: %s", esp_err_to_name(err));
     }
 }
-static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-    char *TAG = "WRITE";
-    struct os_mbuf *om = ctxt->om;
-    
-    if (!om || om->om_len == 0) {  
-        ESP_LOGE(TAG, "BLE Write received NULL or empty buffer");
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    }
+#define MAX_JSON_SIZE 4096  // Adjust buffer size as needed
 
-    size_t len = om->om_len;
-    if (len >= MAX_MTU) {  // Prevent buffer overflow
-        ESP_LOGE(TAG, "BLE write too large! Max: %d, Received: %d", MAX_MTU, len);
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    }
+// Global buffer to store incoming JSON
+static char json_buffer[MAX_JSON_SIZE] = {0};
+static int json_index = 0;  // Track buffer position
 
-    char json_str[MAX_MTU] = {0};  // Use only one buffer
-    strncpy(json_str, (char *)om->om_data, len);
-    json_str[len] = '\0';
 
-    ESP_LOGI(TAG, "Received JSON: %s", json_str);
-
-    // Validate JSON format
-    if (strlen(json_str) == 0 || json_str[0] != '{') {
-        ESP_LOGE(TAG, "Invalid JSON data");
-        return BLE_ATT_ERR_UNLIKELY;
-    }
-
-    // Parse JSON
-    cJSON *root = cJSON_Parse(json_str);
+// Function to parse JSON
+void parse_json() {
+    cJSON *root = cJSON_Parse(json_buffer);
     if (!root) {
-        ESP_LOGE(TAG, "JSON Parsing Failed");
-        return BLE_ATT_ERR_UNLIKELY;
+        ESP_LOGE(TAG, "JSON Parsing Failed!");
+        return;
     }
 
-    // Extract values
+    // Extract values from JSON
     cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
     cJSON *password = cJSON_GetObjectItem(root, "password");
     cJSON *name = cJSON_GetObjectItem(root, "sensor_name");
@@ -137,19 +117,10 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 
     if (ssid && password && name && location && api_token) {
         strncpy(main_struct.ssid, ssid->valuestring, sizeof(main_struct.ssid) - 1);
-        main_struct.ssid[sizeof(main_struct.ssid) - 1] = '\0';
-
         strncpy(main_struct.password, password->valuestring, sizeof(main_struct.password) - 1);
-        main_struct.password[sizeof(main_struct.password) - 1] = '\0';
-
         strncpy(main_struct.name, name->valuestring, sizeof(main_struct.name) - 1);
-        main_struct.name[sizeof(main_struct.name) - 1] = '\0';
-
         strncpy(main_struct.location, location->valuestring, sizeof(main_struct.location) - 1);
-        main_struct.location[sizeof(main_struct.location) - 1] = '\0';
-
         strncpy(main_struct.apiToken, api_token->valuestring, sizeof(main_struct.apiToken) - 1);
-        main_struct.apiToken[sizeof(main_struct.apiToken) - 1] = '\0';
 
         ESP_LOGI(TAG, "Parsed Data: SSID=%s, Name=%s, Location=%s", main_struct.ssid, main_struct.name, main_struct.location);
 
@@ -159,10 +130,45 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         ESP_LOGE(TAG, "Missing JSON fields!");
     }
 
-    cJSON_Delete(root); // Free JSON object
-    return 0;
+    cJSON_Delete(root);  // Free JSON object
 }
 
+
+static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    char *TAG="BLE_WRITE";
+    struct os_mbuf *om = ctxt->om;
+
+    if (!om || om->om_len == 0) {  
+        ESP_LOGE(TAG, "BLE Write received NULL or empty buffer");
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    size_t len = om->om_len;
+
+    // Prevent buffer overflow
+    if (json_index + len >= MAX_JSON_SIZE) {
+        ESP_LOGE(TAG, "Buffer overflow! JSON too large.");
+        json_index = 0;  // Reset buffer
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    // Append received chunk to buffer
+    strncat(json_buffer, (char *)om->om_data, len);
+    json_index += len;
+    json_buffer[json_index] = '\0';  // Ensure null termination
+
+    ESP_LOGI(TAG, "Received JSON Chunk: %s", (char *)om->om_data);
+
+    // Check if the JSON transmission is complete (ends with '}')
+    if (json_buffer[json_index - 1] == '}') {
+        ESP_LOGI(TAG, "Full JSON received, parsing...");
+        parse_json();
+        json_index = 0;  // Reset buffer for next message
+        memset(json_buffer, 0, MAX_JSON_SIZE);
+    }
+
+    return 0;
+}
 
 // Read data from ESP32 defined as server
 static int device_read(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg){
@@ -207,8 +213,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
 };
 
 // Function to send a notification
-static void send_hostname()
-{
+static void send_hostname(){
     struct os_mbuf *om;
 
     // Allocate memory for the message
@@ -244,8 +249,7 @@ static void send_hostname()
 
 
 // BLE event handling
-static int ble_gap_event(struct ble_gap_event *event, void *arg)
-{
+static int ble_gap_event(struct ble_gap_event *event, void *arg){
     switch (event->type)
     {
     // Advertise if connected
@@ -354,8 +358,7 @@ void ble_app_advertise(void) {
     xTaskCreate(blink_led, "Blink LED", 2048, NULL, 5, NULL);
 }
 
-static void nimble_host_task(void *param)
-{
+static void nimble_host_task(void *param){
     char *TAG = "NimBLE";
     // Task entry log 
     ESP_LOGI(TAG, "NimBLE host task has been started!");
