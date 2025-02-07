@@ -15,7 +15,7 @@ typedef struct {
 
 BatteryStatus getBattery();  // Declaration of getBattery function
 int readMoisture();  // Declaration of readMoisture function
-
+void check_update();
 void take_reading();  // Declaration of take_reading function
 void monitor();  // Declaration of battery_monitor function
 

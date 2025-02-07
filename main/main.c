@@ -2,8 +2,11 @@
 #include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "freertos/event_groups.h"
 #include "esp_event.h"
+#include "esp_ota_ops.h"
+#include "esp_http_client.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_nimble_hci.h"
@@ -26,6 +29,9 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_mac.h"  // Include the correct header for esp_read_mac
+#include "cert.h"
+#include "esp_sntp.h"
+
 
 #define JSON_CONFIG_UUID 0xFEFA  // UUID for JSON data
 #define SERVICE_CHR_UUID 0xFEF3
@@ -33,8 +39,9 @@
 #define MANUFACTURER_NAME "Rodland Farms"
 // Define GPIO pin for the button
 #define BUTTON_GPIO 6
-#define MAX_MTU 247
-
+#define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
+#define SERVER_URL "https://athome.rodlandfarms.com/firmware.json"
+#define CURRENT_VERSION "1.0.0"  // Define the current version number of your firmware
 
 char *TAG = "-";
 
@@ -45,6 +52,32 @@ uint16_t prov_status_attr_handle = 0;
 uint16_t hostname_attr_handle;
 
 main_struct_t main_struct = {.credentials_recv = 0, .isProvisioned = false};
+
+// NTP Sync Callback
+static bool time_is_set = false;
+
+void time_sync_notification_cb(struct timeval *tv) {
+    ESP_LOGI("NTP", "Time synchronized with NTP server");
+    time_is_set = true;
+}
+
+// Initialize SNTP and sync time
+void initialize_sntp() {
+    ESP_LOGI("NTP", "Initializing SNTP...");
+    esp_sntp_init();
+    const char *ntp_server = "pool.ntp.org";  // NTP server
+    esp_sntp_setservername(0, ntp_server);    // Set NTP server
+    esp_sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+    esp_sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+    esp_sntp_restart();
+}
+
+// Wait for time synchronization
+void wait_for_time_sync() {
+    while (!time_is_set) {
+        vTaskDelay(1000 / portTICK_PERIOD_MS);  // Wait for 1 second
+    }
+}
 
 // Notification function for PROV_STATUS_UUID
 void notify_prov_status(uint8_t status_data)
@@ -169,6 +202,8 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
 
     return 0;
 }
+
+
 
 // Read data from ESP32 defined as server
 static int device_read(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg){
@@ -574,6 +609,7 @@ void ble_advert(void){
 
 }
 
+
 // Function to enter deep sleep based on the selected duration
 void enter_deep_sleep(SleepDuration duration)
 {
@@ -594,9 +630,127 @@ void enter_deep_sleep(SleepDuration duration)
     esp_deep_sleep_start();
 }
 
+
+#include <string.h>
+#include "esp_https_ota.h"
+
+#define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
+#define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
+
+static char current_version_number[] = "1658075072";  // Replace with actual version
+
+void perform_ota_update()
+{
+    char *TAG = "OTA_UPDATE";
+    ESP_LOGI(TAG, "Starting OTA update...");
+    
+    esp_http_client_config_t config = {
+        .url = OTA_URL,
+        .cert_pem = cert_pem,
+        .timeout_ms = 5000,
+    };
+
+    esp_https_ota_config_t ota_config = {
+        .http_config = &config,
+    };
+
+    esp_err_t ret = esp_https_ota(&ota_config);
+    
+    if (ret == ESP_OK)
+    {
+        ESP_LOGI(TAG, "OTA update successful! Restarting...");
+        esp_restart();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "OTA update failed!");
+    }
+}
+
+void check_update()
+{
+    char *TAG = "OTA_CHECK";
+    ESP_LOGI(TAG, "Checking for firmware updates...");
+
+    esp_http_client_config_t http_config = {
+        .url = JSON_URL,
+        .cert_pem = cert_pem,
+        .timeout_ms = 5000,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL, // Ensure SSL is used
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_config);
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
+
+    esp_err_t err = esp_http_client_perform(client);
+    
+    if (err == ESP_OK)
+    {
+        int content_length = esp_http_client_get_content_length(client);
+        char *buffer = malloc(content_length + 1);
+        if (buffer == NULL)
+        {
+            ESP_LOGE(TAG, "Memory allocation failed");
+            esp_http_client_cleanup(client);
+            return;
+        }
+
+        esp_http_client_read(client, buffer, content_length);
+        buffer[content_length] = '\0';  // Ensure null-termination
+
+        cJSON *json = cJSON_Parse(buffer);
+        if (json == NULL)
+        {
+            ESP_LOGE(TAG, "JSON Parsing Error");
+            free(buffer);
+            esp_http_client_cleanup(client);
+            return;
+        }
+
+        const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
+        const cJSON *type = cJSON_GetObjectItemCaseSensitive(json, "type");
+        const cJSON *host = cJSON_GetObjectItemCaseSensitive(json, "host");
+        const cJSON *port = cJSON_GetObjectItemCaseSensitive(json, "port");
+        const cJSON *bin = cJSON_GetObjectItemCaseSensitive(json, "bin");
+        ESP_LOGI(TAG, "Device Type: %s", type->valuestring);
+        ESP_LOGI(TAG, "Host: %s", host->valuestring);
+        ESP_LOGI(TAG, "Port: %s", port->valuestring);
+        ESP_LOGI(TAG, "File: %s", bin->valuestring);
+        ESP_LOGI(TAG, "Version: %s", version->valuestring);
+        if (cJSON_IsString(version) && (version->valuestring != NULL))
+        {
+            ESP_LOGI(TAG, "Server Version: %s", version->valuestring);
+            ESP_LOGI(TAG, "Current Version: %s", current_version_number);
+
+            if (strcmp(version->valuestring, current_version_number) != 0)
+            {
+                ESP_LOGI(TAG, "Version mismatch detected! Starting OTA...");
+                perform_ota_update();
+            }
+            else
+            {
+                ESP_LOGI(TAG, "No update required. Already running the latest firmware.");
+            }
+        }
+
+        cJSON_Delete(json);
+        free(buffer);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+    }
+
+    esp_http_client_cleanup(client);
+    monitor();  // Call your monitoring function after a successful connection
+}
+
+
 // Main application entry point
 void app_main() {
     char *TAG = "MAIN";
+
+
     // Configure GPIO for button
     configure_button_gpio();
     // Configure ADC1 channel 5 (GPIO5) for 12-bit width and 11dB attenuation

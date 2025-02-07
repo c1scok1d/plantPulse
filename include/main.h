@@ -28,6 +28,8 @@ extern main_struct_t main_struct;
 
 void ble_advert(void);
 void enter_deep_sleep(SleepDuration duration);
+void initialize_sntp();
+void wait_for_time_sync();
 
 
 #endif

@@ -9,6 +9,8 @@
 #include "freertos/event_groups.h"
 #include "main.h"
 #include "data.h"
+#include <sys/time.h>  // For gettimeofday()
+
 
 // Define the maximum size for hostname (12 characters for MAC + 1 for null terminator)
 #define MAX_HOSTNAME_LEN 13
@@ -72,7 +74,26 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
         main_struct.isProvisioned = true;
-        monitor();  // Call your monitoring function after a successful connection
+        // Initialize SNTP to set time
+        initialize_sntp();
+
+        // Wait for time sync to complete
+        wait_for_time_sync();
+
+        ESP_LOGI("NTP", "Time successfully synchronized!");
+        struct timeval tv;
+        gettimeofday(&tv, NULL);  // Get current time
+
+        struct tm timeinfo;
+        localtime_r(&tv.tv_sec, &timeinfo);  // Convert to local time
+
+        char time_str[64];
+        strftime(time_str, sizeof(time_str), "%c", &timeinfo);  // Format time as a readable string
+
+        ESP_LOGI("NTP", "Current time: %s", time_str);  // Log current time
+
+         // Check for firmwareupdate
+        xTaskCreate(&check_update, "check_update", 8192, NULL, 5, NULL);
     }
 }
 
