@@ -646,7 +646,7 @@ void perform_ota_update()
     
     esp_http_client_config_t config = {
         .url = OTA_URL,
-        .cert_pem = cert_pem,
+        .cert_pem = cert_pem2,
         .timeout_ms = 5000,
     };
 
@@ -674,9 +674,9 @@ void check_update()
 
     esp_http_client_config_t http_config = {
         .url = JSON_URL,
-        .cert_pem = cert_pem,
+        .cert_pem = cert_pem2,
         .timeout_ms = 5000,
-        .transport_type = HTTP_TRANSPORT_OVER_SSL, // Ensure SSL is used
+        //.transport_type = HTTP_TRANSPORT_OVER_SSL, // Ensure SSL is used
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
@@ -698,10 +698,14 @@ void check_update()
         esp_http_client_read(client, buffer, content_length);
         buffer[content_length] = '\0';  // Ensure null-termination
 
+        // Print the raw JSON response
+        ESP_LOGI(TAG, "JSON Response: %s", buffer);
+
         cJSON *json = cJSON_Parse(buffer);
         if (json == NULL)
         {
             ESP_LOGE(TAG, "JSON Parsing Error");
+            ESP_LOGE(TAG, "Data: %s", buffer);
             free(buffer);
             esp_http_client_cleanup(client);
             return;
@@ -735,9 +739,7 @@ void check_update()
 
         cJSON_Delete(json);
         free(buffer);
-    }
-    else
-    {
+    } else {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
     }
 
