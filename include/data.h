@@ -10,7 +10,8 @@
 // Define a typedef for BatteryStatus
 typedef struct {
     float soc;
-    bool batteryInserted;
+    bool status;
+    float crate;
 } BatteryStatus;
 
 BatteryStatus getBattery();  // Declaration of getBattery function

@@ -5,13 +5,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "main.h"
-//#include "http.h"
 #include "cJSON.h"
-#include <string.h>
 #include "driver/i2c.h"
 #include "rest_methods.h"
 #include "time.h"      // For time manipulation (including time-related functions like local time)
 #include "sntp.h" 
+#include <stdio.h>
+#include "driver/i2c.h"
 
 static const char *TAG = "DATA";
 
@@ -25,13 +25,14 @@ int map(int x, int in_min, int in_max, int out_min, int out_max) {
 
 #define I2C_MASTER_SCL_IO  17    // SCL pin
 #define I2C_MASTER_SDA_IO  16    // SDA pin
-#define I2C_MASTER_FREQ_HZ 100000 // I2C frequency
+#define I2C_MASTER_FREQ_HZ 400000 // I2C frequency
 #define I2C_MASTER_NUM I2C_NUM_0 // I2C port number
 
 #define MAX17048_ADDR  0x36  // MAX17048 I2C address
 #define REG_VCELL      0x02  // Voltage register
 #define REG_SOC        0x04  // SOC register
-#define REG_STATUS     0x00  // Status register
+#define REG_STATUS     0x1A  // Status register
+#define REG_CRATE      0X16
 
 // Function to initialize I2C
 static void i2c_master_init(void) {
@@ -49,7 +50,7 @@ static void i2c_master_init(void) {
 
 // Function to read a 16-bit register from MAX17048
 static uint16_t max17048_read_register(uint8_t reg) {
-    uint8_t data[2];  // Data buffer to hold 2 bytes
+    uint8_t data[2] = {0};  // Data buffer to hold 2 bytes
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();  // Create I2C command handle
 
     // Start the I2C communication
@@ -72,7 +73,7 @@ static uint16_t max17048_read_register(uint8_t reg) {
     return (data[0] << 8) | data[1];  // Return as 16-bit value (MSB first)
 }
 
-
+/*
 static void max17048_check_status() {
     uint16_t status = max17048_read_register(REG_STATUS);
     
@@ -100,42 +101,68 @@ static void max17048_check_status() {
     uint16_t soc_raw = max17048_read_register(REG_SOC);
     float soc = soc_raw / 256.0; // Convert to percentage
     printf("State of Charge: %.2f%%\n", soc);
+}*/
+// Function to read from a register on the MAX17048
+esp_err_t read_register(uint8_t reg_addr, uint8_t *data, size_t len) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg_addr, true);
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_READ, true);
+    i2c_master_read(cmd, data, len, I2C_MASTER_ACK);
+    i2c_master_stop(cmd);
+    //ESP_ERROR_CHECK(i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(1000)));
+    i2c_cmd_link_delete(cmd);
+    return ESP_OK;
 }
-
-// Function to read battery voltage
+// structure to store battery data
 struct BatteryStatus {
     float soc;
-    bool batteryInserted;
+    bool status;
+    float crate;
 };
 
 BatteryStatus getBattery() {
     static const char *TAG = "BatterySensor";  // Logging tag
-
     BatteryStatus batteryStatus = { -1.0, false }; // Default values
 
+    uint8_t data[2];
+    uint16_t voltage, soc, crate, state;
+
+    // Read VCELL register (battery voltage)
+    //ESP_ERROR_CHECK(read_register(REG_VCELL, data, 2));  // VCELL address
+    //voltage = (data[0] << 8) | data[1];  // Raw voltage value from the register
+    //float voltage_real = voltage * 1.25 / 1000; // Convert to volts
+    uint16_t vcell_raw = max17048_read_register(REG_VCELL);
+    float voltage_actual = (vcell_raw >> 4) * 1.25 / 1000; // Convert to volts
+
+    // Read SOC register (State of Charge)
     uint16_t soc_raw = max17048_read_register(REG_SOC);
-    float soc = soc_raw / 256.0; // Convert to percentage
-    
-    uint16_t status = max17048_read_register(REG_STATUS);
+    float soc_actual = soc_raw / 256.0; // Convert to percentage
+    batteryStatus.soc = soc_actual ;
 
-    // Print the status register to verify the battery status bits
-    printf("Status Register: 0x%04x\n", status);
-    
-    // Check if the battery is inserted
-    bool battery_inserted = status & (1 << 9);  // Bit 9: BI (Battery Inserted)
+    // Read CRATE register (Charge/Discharge rate)
+    uint16_t crate_raw = max17048_read_register(REG_CRATE);
+    float crate_actual = crate_raw / 256.0; // Convert to percentage
+    batteryStatus.crate = crate_actual;
 
-    batteryStatus.batteryInserted = battery_inserted;
-    if (battery_inserted) {
-        printf("Battery is inserted.\n");
-        batteryStatus.soc = soc;  // Store SOC only if battery is present
-    } else {
-        printf("Battery is NOT inserted. Using USB power.\n");
-        printf("No battery detected, voltage and SOC are invalid.\n");
-    }
+    // Read STATE register (Battery state)
+    ESP_ERROR_CHECK(read_register(REG_STATUS, data, 2));  // STATE address
+    uint16_t status_raw = max17048_read_register(REG_STATUS);
+    state = (data[0] << 8) | data[1];  // Raw state value
+    //bool charging = !(state & 0x01);  // If bit 0 is 0, charging is true
+    batteryStatus.status = !(state & 0x01);  // If bit 0 is 0, charging is true
+
+     // Log the data
+    ESP_LOGI(TAG, "Battery Monitoring Data:");
+    ESP_LOGI(TAG, "Voltage: %.3f V", voltage_actual); // Convert to volts;  // Log voltage in volts (real_voltage in mV)
+    ESP_LOGI(TAG, "State of Charge (SOC): %.2f%%", batteryStatus.soc);
+    ESP_LOGI(TAG, "Charge/Discharge Rate: %.2f%%/hr", batteryStatus.crate);
+    ESP_LOGI(TAG, "Battery State: %s", (batteryStatus.status) ? "Discharging" : "Charging");
 
     return batteryStatus;
 }
-
 
 // Function to read moisture level
 int readMoisture() {
@@ -243,10 +270,49 @@ void uploadReadings(int moisture, float battery, bool battery_status, const char
     xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
 }
 
+/*
+// Function to log battery data
+void log_battery_data() {
+    uint8_t data[2];
+    uint16_t voltage, soc, crate, state;
 
-void monitor()
-{
+    // Read VCELL register (battery voltage)
+    ESP_ERROR_CHECK(read_register(REG_VCELL, data, 2));  // VCELL address
+    voltage = (data[0] << 8) | data[1];  // Raw voltage value from the register
+    float real_voltage = voltage * 78.125;  // Voltage in mV (78.125 µV per bit)
+
+    // Read SOC register (State of Charge)
+    ESP_ERROR_CHECK(read_register(REG_SOC, data, 2));  // SOC address
+    soc = (data[0] << 8) | data[1];  // Raw SOC value
+    soc = soc / 256;  // Convert to percentage (check if this division is necessary)
+
+    // Read CRATE register (Charge/Discharge rate)
+    ESP_ERROR_CHECK(read_register(REG_CRATE, data, 2));  // CRATE address
+    crate = (data[0] << 8) | data[1];  // Raw charge rate
+    crate = crate / 256;  // Convert to percentage per hour (check if this division is necessary)
+
+    // Read STATE register (Battery state)
+    ESP_ERROR_CHECK(read_register(REG_STATUS, data, 2));  // STATE address
+    state = (data[0] << 8) | data[1];  // Raw state value
+
+    // Debug prints for raw values
+    ESP_LOGI(TAG, "Raw Voltage Register Value: 0x%04X", voltage);
+    ESP_LOGI(TAG, "Raw SOC Register Value: 0x%04X", soc);
+    ESP_LOGI(TAG, "Raw Charge Rate Register Value: 0x%04X", crate);
+    ESP_LOGI(TAG, "Raw State Register Value: 0x%04X", state);
+
+    // Log the data
+    ESP_LOGI(TAG, "Battery Monitoring Data:");
+    ESP_LOGI(TAG, "Voltage: %.3f V", voltage * 1.25 / 100); // Convert to volts;  // Log voltage in volts (real_voltage in mV)
+    ESP_LOGI(TAG, "State of Charge (SOC): %.2f%%", (float)soc);
+    ESP_LOGI(TAG, "Charge/Discharge Rate: %.2f%%/hr", (float)crate);
+    ESP_LOGI(TAG, "Battery State: %s", (state & 0x01) ? "Discharging" : "Charging");
+}*/
+
+
+void monitor(){
     i2c_master_init();
+    //log_battery_data();
 
     // Read battery and moisture data
     BatteryStatus battery = getBattery();
@@ -254,7 +320,7 @@ void monitor()
     int moisture = readMoisture();
 
     // Upload data
-    uploadReadings(moisture, battery.soc, battery.batteryInserted, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
+    uploadReadings(moisture, battery.soc, battery.status, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));  
@@ -263,10 +329,10 @@ void monitor()
     //enter_deep_sleep(ONE_MIN_SLEEP);
 
     // Sleep for 1 hour
-    enter_deep_sleep(ONE_HOUR_SLEEP);
+    //enter_deep_sleep(ONE_HOUR_SLEEP);
 
     // Sleep for 8 hours
-    //enter_deep_sleep(EIGHT_HOUR_SLEEP);
+    enter_deep_sleep(EIGHT_HOUR_SLEEP);
 
     // Sleep for 12 hours
     //enter_deep_sleep(TWELEVE_HOUR_SLEEP);
