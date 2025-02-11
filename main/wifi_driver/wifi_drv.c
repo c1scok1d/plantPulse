@@ -92,8 +92,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         ESP_LOGI("NTP", "Current time: %s", time_str);  // Log current time
 
-        // Check for firmwareupdate
-        xTaskCreate(check_update, "check_update", 8192, NULL, 5, NULL);
+        monitor();  // Call your monitoring function after a successful connection
+
     }
 }
 

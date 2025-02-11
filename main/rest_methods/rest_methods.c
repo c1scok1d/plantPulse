@@ -19,7 +19,7 @@
 
 esp_err_t _http_event_handler_post(esp_http_client_event_t *evt)
 {
-    static char *TAG = "HTTP";
+    static char *TAG = "POST_HANDLER";
     static char *output_buffer; // Buffer to store response of http request from event handler
     static int output_len;      // Stores number of bytes read
     switch (evt->event_id)
@@ -117,6 +117,10 @@ int POST(const char* server_uri, const char* to_send)
     {
         ESP_LOGI(TAG, "POST Request Successful\n");
         ESP_LOGI(TAG, "HTTP Status Code: %d\n", status_code);
+         if (response.buffer)
+        {
+            ESP_LOGI(TAG, "POST Response Data: %s", response.buffer);
+        }
         return status_code;
     }
     else

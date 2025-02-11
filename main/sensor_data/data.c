@@ -22,7 +22,6 @@ int map(int x, int in_min, int in_max, int out_min, int out_max) {
 }
 
 
-
 #define I2C_MASTER_SCL_IO  17    // SCL pin
 #define I2C_MASTER_SDA_IO  16    // SDA pin
 #define I2C_MASTER_FREQ_HZ 400000 // I2C frequency
@@ -73,35 +72,6 @@ static uint16_t max17048_read_register(uint8_t reg) {
     return (data[0] << 8) | data[1];  // Return as 16-bit value (MSB first)
 }
 
-/*
-static void max17048_check_status() {
-    uint16_t status = max17048_read_register(REG_STATUS);
-    
-    // Check if the battery is inserted
-    bool battery_inserted = status & (1 << 9);  // Bit 9: BI (Battery Inserted)
-
-    if (battery_inserted) {
-        printf("Battery is inserted.\n");
-    } else {
-        printf("Battery is NOT inserted. Using USB power.\n");
-    }
-
-    // If no battery is inserted, don't process battery voltage/SOC
-    if (!battery_inserted) {
-        printf("No battery detected, voltage and SOC are invalid.\n");
-        return;
-    }
-
-    // Otherwise, continue with reading the battery status
-    // Check voltage and SOC (as before)
-    uint16_t vcell_raw = max17048_read_register(REG_VCELL);
-    float voltage = (vcell_raw >> 4) * 1.25 / 1000; // Convert to volts
-    printf("Measured Battery Voltage: %.3fV\n", voltage);
-
-    uint16_t soc_raw = max17048_read_register(REG_SOC);
-    float soc = soc_raw / 256.0; // Convert to percentage
-    printf("State of Charge: %.2f%%\n", soc);
-}*/
 // Function to read from a register on the MAX17048
 esp_err_t read_register(uint8_t reg_addr, uint8_t *data, size_t len) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -112,7 +82,6 @@ esp_err_t read_register(uint8_t reg_addr, uint8_t *data, size_t len) {
     i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_READ, true);
     i2c_master_read(cmd, data, len, I2C_MASTER_ACK);
     i2c_master_stop(cmd);
-    //ESP_ERROR_CHECK(i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(1000)));
     i2c_cmd_link_delete(cmd);
     return ESP_OK;
 }
@@ -124,16 +93,13 @@ struct BatteryStatus {
 };
 
 BatteryStatus getBattery() {
-    static const char *TAG = "BatterySensor";  // Logging tag
+    static const char *TAG = "BATTERY";  // Logging tag
     BatteryStatus batteryStatus = { -1.0, false }; // Default values
 
     uint8_t data[2];
     uint16_t voltage, soc, crate, state;
 
     // Read VCELL register (battery voltage)
-    //ESP_ERROR_CHECK(read_register(REG_VCELL, data, 2));  // VCELL address
-    //voltage = (data[0] << 8) | data[1];  // Raw voltage value from the register
-    //float voltage_real = voltage * 1.25 / 1000; // Convert to volts
     uint16_t vcell_raw = max17048_read_register(REG_VCELL);
     float voltage_actual = (vcell_raw >> 4) * 1.25 / 1000; // Convert to volts
 
@@ -155,18 +121,18 @@ BatteryStatus getBattery() {
     batteryStatus.status = !(state & 0x01);  // If bit 0 is 0, charging is true
 
      // Log the data
-    ESP_LOGI(TAG, "Battery Monitoring Data:");
+    //ESP_LOGI(TAG, "Battery Monitoring Data:");
     ESP_LOGI(TAG, "Voltage: %.3f V", voltage_actual); // Convert to volts;  // Log voltage in volts (real_voltage in mV)
     ESP_LOGI(TAG, "State of Charge (SOC): %.2f%%", batteryStatus.soc);
     ESP_LOGI(TAG, "Charge/Discharge Rate: %.2f%%/hr", batteryStatus.crate);
-    ESP_LOGI(TAG, "Battery State: %s", (batteryStatus.status) ? "Discharging" : "Charging");
+    //ESP_LOGI(TAG, "Battery State: %s", (batteryStatus.status) ? "Discharging" : "Charging");
 
     return batteryStatus;
 }
 
 // Function to read moisture level
 int readMoisture() {
-    static const char *TAG = "MoistureSensor";  // Logging tag
+    static const char *TAG = "MOISTURE";  // Logging tag
     int reading = 0;
 
 
@@ -177,7 +143,7 @@ int readMoisture() {
     int moisture = map(reading, 3600, 2130, 0, 100);
 
     // Log the raw ADC reading and calculated moisture percentage
-    ESP_LOGI(TAG, "Raw ADC Reading: %d, Moisture: %d%%", reading, moisture);
+    ESP_LOGI(TAG, "Raw ADC Reading: %d, Moisture %%: %d%%", reading, moisture);
 
     return moisture;
 }
@@ -225,9 +191,9 @@ void uploadReadingsTask(void *param)
 
     // Check if the request was successful
     if (httpResponseCode == 200) {
-        ESP_LOGI("UploadReadings", "POST request successful. HTTP response code: %d", httpResponseCode);
+        ESP_LOGI("UploadReadingsTask", "POST request successful. HTTP response code: %d", httpResponseCode);
     } else {
-        ESP_LOGE("UploadReadings", "POST request failed. HTTP response code: %d", httpResponseCode);
+        ESP_LOGE("UploadReadingsTask", "POST request failed. HTTP response code: %d", httpResponseCode);
     }
 
     // Free the allocated memory for task parameter
@@ -270,53 +236,15 @@ void uploadReadings(int moisture, float battery, bool battery_status, const char
     xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
 }
 
-/*
-// Function to log battery data
-void log_battery_data() {
-    uint8_t data[2];
-    uint16_t voltage, soc, crate, state;
-
-    // Read VCELL register (battery voltage)
-    ESP_ERROR_CHECK(read_register(REG_VCELL, data, 2));  // VCELL address
-    voltage = (data[0] << 8) | data[1];  // Raw voltage value from the register
-    float real_voltage = voltage * 78.125;  // Voltage in mV (78.125 µV per bit)
-
-    // Read SOC register (State of Charge)
-    ESP_ERROR_CHECK(read_register(REG_SOC, data, 2));  // SOC address
-    soc = (data[0] << 8) | data[1];  // Raw SOC value
-    soc = soc / 256;  // Convert to percentage (check if this division is necessary)
-
-    // Read CRATE register (Charge/Discharge rate)
-    ESP_ERROR_CHECK(read_register(REG_CRATE, data, 2));  // CRATE address
-    crate = (data[0] << 8) | data[1];  // Raw charge rate
-    crate = crate / 256;  // Convert to percentage per hour (check if this division is necessary)
-
-    // Read STATE register (Battery state)
-    ESP_ERROR_CHECK(read_register(REG_STATUS, data, 2));  // STATE address
-    state = (data[0] << 8) | data[1];  // Raw state value
-
-    // Debug prints for raw values
-    ESP_LOGI(TAG, "Raw Voltage Register Value: 0x%04X", voltage);
-    ESP_LOGI(TAG, "Raw SOC Register Value: 0x%04X", soc);
-    ESP_LOGI(TAG, "Raw Charge Rate Register Value: 0x%04X", crate);
-    ESP_LOGI(TAG, "Raw State Register Value: 0x%04X", state);
-
-    // Log the data
-    ESP_LOGI(TAG, "Battery Monitoring Data:");
-    ESP_LOGI(TAG, "Voltage: %.3f V", voltage * 1.25 / 100); // Convert to volts;  // Log voltage in volts (real_voltage in mV)
-    ESP_LOGI(TAG, "State of Charge (SOC): %.2f%%", (float)soc);
-    ESP_LOGI(TAG, "Charge/Discharge Rate: %.2f%%/hr", (float)crate);
-    ESP_LOGI(TAG, "Battery State: %s", (state & 0x01) ? "Discharging" : "Charging");
-}*/
-
-
 void monitor(){
+    // Check for firmwareupdate
+    check_update();
+    //xTaskCreate(check_update, "check_update", 8192, NULL, 5, NULL);
+    
     i2c_master_init();
-    //log_battery_data();
 
     // Read battery and moisture data
     BatteryStatus battery = getBattery();
-    //float battery = getBattery();
     int moisture = readMoisture();
 
     // Upload data

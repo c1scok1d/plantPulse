@@ -522,7 +522,6 @@ void monitor_button_press(void *pvParameter) {
     }
 }
 
-
 void notify_status(void *arg)
 {
     char *TAG = "NOTIFY_STATUS";
@@ -549,8 +548,7 @@ void mac_to_string(uint8_t *mac, char *mac_str) {
 
 
 // BLE sync callback function
-void ble_app_on_sync(void)
-{
+void ble_app_on_sync(void){
     char *TAG = "BLE_SYNC";
     // The BLE stack is now synchronized and ready to run BLE operations
     ESP_LOGI(TAG, "BLE sync completed.");
@@ -611,8 +609,7 @@ void ble_advert(void){
 
 
 // Function to enter deep sleep based on the selected duration
-void enter_deep_sleep(SleepDuration duration)
-{
+void enter_deep_sleep(SleepDuration duration){
     //#define BUTTON_GPIO 6
     static const char *TAG = "SLEEP";
     uint64_t sleep_duration_us = (uint64_t)duration * (uint64_t)1000000; // Convert seconds to microseconds
@@ -639,8 +636,7 @@ void enter_deep_sleep(SleepDuration duration)
 
 static char current_version_number[] = "1658075072";  // Replace with actual version
 
-void perform_ota_update()
-{
+void perform_ota_update(){
     char *TAG = "OTA_UPDATE";
     ESP_LOGI(TAG, "Starting OTA update...");
     
@@ -667,16 +663,16 @@ void perform_ota_update()
     }
 }
 
-void check_update()
-{
+void check_update(void *pvParameters) {  
+    esp_log_level_set("*", ESP_LOG_DEBUG);
     char *TAG = "OTA_CHECK";
     ESP_LOGI(TAG, "Checking for firmware updates...");
 
     esp_http_client_config_t http_config = {
-        .url = JSON_URL,
+        .url = "http://athome.rodlandfarms.com/firmware.json",
         .cert_pem = cert_pem2,
-        .timeout_ms = 5000,
-        //.transport_type = HTTP_TRANSPORT_OVER_SSL, // Ensure SSL is used
+        .timeout_ms = 3000,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
@@ -684,68 +680,126 @@ void check_update()
 
     esp_err_t err = esp_http_client_perform(client);
     
-    if (err == ESP_OK)
-    {
-        int content_length = esp_http_client_get_content_length(client);
-        char *buffer = malloc(content_length + 1);
-        if (buffer == NULL)
-        {
-            ESP_LOGE(TAG, "Memory allocation failed");
-            esp_http_client_cleanup(client);
-            return;
-        }
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+         
+        ESP_LOGI(TAG, "HTTP Response Code: %d", status_code); 
 
-        esp_http_client_read(client, buffer, content_length);
-        buffer[content_length] = '\0';  // Ensure null-termination
+        if (esp_http_client_is_chunked_response(client)) {
+            // If response is chunked, process chunks dynamically
+            char *output_buffer = NULL;
+            int output_len = 0;
+            int total_read = 0;
+            int bytes_read = 0;
 
-        // Print the raw JSON response
-        ESP_LOGI(TAG, "JSON Response: %s", buffer);
+            // Read data in chunks and store in output_buffer
+            while (1) {
+                bytes_read = esp_http_client_read(client, output_buffer + total_read, 1024);
+                if (bytes_read < 0) {
+                    ESP_LOGE(TAG, "HTTP read failed: %s", esp_err_to_name(bytes_read));
+                    break;
+                } else if (bytes_read == 0) {
+                    // End of data received
+                    break;
+                }
 
-        cJSON *json = cJSON_Parse(buffer);
-        if (json == NULL)
-        {
-            ESP_LOGE(TAG, "JSON Parsing Error");
-            ESP_LOGE(TAG, "Data: %s", buffer);
-            free(buffer);
-            esp_http_client_cleanup(client);
-            return;
-        }
+                // Resize the buffer if necessary
+                if (output_buffer == NULL) {
+                    output_buffer = malloc(1024);  // Initial allocation
+                } else {
+                    output_buffer = realloc(output_buffer, output_len + bytes_read);
+                }
 
-        const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
-        const cJSON *type = cJSON_GetObjectItemCaseSensitive(json, "type");
-        const cJSON *host = cJSON_GetObjectItemCaseSensitive(json, "host");
-        const cJSON *port = cJSON_GetObjectItemCaseSensitive(json, "port");
-        const cJSON *bin = cJSON_GetObjectItemCaseSensitive(json, "bin");
-        ESP_LOGI(TAG, "Device Type: %s", type->valuestring);
-        ESP_LOGI(TAG, "Host: %s", host->valuestring);
-        ESP_LOGI(TAG, "Port: %s", port->valuestring);
-        ESP_LOGI(TAG, "File: %s", bin->valuestring);
-        ESP_LOGI(TAG, "Version: %s", version->valuestring);
-        if (cJSON_IsString(version) && (version->valuestring != NULL))
-        {
-            ESP_LOGI(TAG, "Server Version: %s", version->valuestring);
-            ESP_LOGI(TAG, "Current Version: %s", current_version_number);
+                if (output_buffer == NULL) {
+                    ESP_LOGE(TAG, "Memory allocation failed");
+                    break;
+                }
 
-            if (strcmp(version->valuestring, current_version_number) != 0)
-            {
-                ESP_LOGI(TAG, "Version mismatch detected! Starting OTA...");
-                perform_ota_update();
+                memcpy(output_buffer + total_read, output_buffer, bytes_read);
+                total_read += bytes_read;
             }
-            else
-            {
-                ESP_LOGI(TAG, "No update required. Already running the latest firmware.");
+
+            if (output_buffer != NULL) {
+                output_buffer[total_read] = '\0';  // Null-terminate the string
+                ESP_LOGI(TAG, "Received JSON: %s", output_buffer);
+
+                cJSON *json = cJSON_Parse(output_buffer);
+                if (json) {
+                    const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
+                    if (version && cJSON_IsString(version) && version->valuestring) {
+                        ESP_LOGI(TAG, "Server Version: %s", version->valuestring);
+                        if (strcmp(version->valuestring, current_version_number) != 0) {
+                            ESP_LOGI(TAG, "Version mismatch detected! Starting OTA...");
+                            perform_ota_update();
+                        } else {
+                            ESP_LOGI(TAG, "No update required. Already running the latest firmware.");
+                        }
+                    }
+                    cJSON_Delete(json);
+                } else {
+                    ESP_LOGE(TAG, "JSON Parsing Error");
+                }
+
+                free(output_buffer);
+            }
+        } else {
+            // Handle non-chunked responses
+            int content_length = esp_http_client_get_content_length(client);
+            ESP_LOGI(TAG, "Content Length: %d", content_length);
+
+            if (content_length > 0) {
+                char *buffer = malloc(content_length + 1);
+                if (buffer == NULL) {
+                    ESP_LOGE(TAG, "Memory allocation failed");
+                } else {
+                    memset(buffer, 0, content_length + 1);
+                    int total_read = 0, bytes_read = 0;
+
+                    while (total_read < content_length) {
+                        bytes_read = esp_http_client_read(client, buffer + total_read, content_length - total_read);
+                        if (bytes_read <= 0) {
+                            ESP_LOGE(TAG, "HTTP read failed or connection closed early");
+                            break;
+                        }
+                        total_read += bytes_read;
+                    }
+
+                    buffer[total_read] = '\0';  // Null-terminate
+                    ESP_LOGI(TAG, "Received JSON: %s", buffer);
+
+                    cJSON *json = cJSON_Parse(buffer);
+                    if (json) {
+                        const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
+                        if (version && cJSON_IsString(version) && version->valuestring) {
+                            ESP_LOGI(TAG, "Server Version: %s", version->valuestring);
+                            if (strcmp(version->valuestring, current_version_number) != 0) {
+                                ESP_LOGI(TAG, "Version mismatch detected! Starting OTA...");
+                                perform_ota_update();
+                            } else {
+                                ESP_LOGI(TAG, "No update required. Already running the latest firmware.");
+                            }
+                        }
+                        cJSON_Delete(json);
+                    } else {
+                        ESP_LOGE(TAG, "JSON Parsing Error");
+                    }
+
+                    free(buffer);
+                }
+            } else {
+                ESP_LOGE(TAG, "Invalid content length!");
             }
         }
-
-        cJSON_Delete(json);
-        free(buffer);
     } else {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
     }
 
-    esp_http_client_cleanup(client);
-    monitor();  // Call your monitoring function after a successful connection
+    //esp_http_client_cleanup(client);
+
+    ESP_LOGI(TAG, "Deleting check_update task.");
+    //vTaskDelete(NULL);  // Delete the FreeRTOS task properly
 }
+
 
 
 // Main application entry point
@@ -779,6 +833,6 @@ void app_main() {
     xTaskCreate(check_credentials, "check_credentials", 4 * 1024, NULL, 5, NULL);
 
     //xTaskCreate(notify_status, "notify_status", 2 * 1024, NULL, 5, NULL);
-}
+    }
 
 }
