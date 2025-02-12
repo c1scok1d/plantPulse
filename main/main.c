@@ -31,6 +31,7 @@
 #include "esp_mac.h"  // Include the correct header for esp_read_mac
 #include "cert.h"
 #include "esp_sntp.h"
+#include "esp_wifi.h"
 
 
 #define JSON_CONFIG_UUID 0xFEFA  // UUID for JSON data
@@ -610,11 +611,25 @@ void ble_advert(void){
 
 // Function to enter deep sleep based on the selected duration
 void enter_deep_sleep(SleepDuration duration){
-    //#define BUTTON_GPIO 6
     static const char *TAG = "SLEEP";
     uint64_t sleep_duration_us = (uint64_t)duration * (uint64_t)1000000; // Convert seconds to microseconds
 
     ESP_LOGI(TAG, "Entering deep sleep mode for %d seconds...", duration);
+    
+    // Disable unused peripherals
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // Enable Wi-Fi power saving
+    esp_wifi_stop(); // disable wifi driver
+
+
+    // Set all unused GPIOs to reduce power leakage
+    for (int i = 0; i < 48; i++) {  // ESP32-S3 has 48 GPIOs
+        if (i != BUTTON_GPIO) {  // Keep wakeup GPIO active
+            gpio_reset_pin(i);
+            gpio_set_direction(i, GPIO_MODE_INPUT);
+            gpio_pulldown_dis(i);
+            gpio_pullup_dis(i);
+        }
+    }
 
     // Configure the RTC timer to wake up after the specified sleep duration
     esp_sleep_enable_timer_wakeup(sleep_duration_us);
