@@ -117,10 +117,6 @@ int POST(const char* server_uri, const char* to_send)
     {
         ESP_LOGI(TAG, "POST Request Successful\n");
         ESP_LOGI(TAG, "HTTP Status Code: %d\n", status_code);
-         if (response.buffer)
-        {
-            ESP_LOGI(TAG, "POST Response Data: %s", response.buffer);
-        }
         return status_code;
     }
     else
