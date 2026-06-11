@@ -236,6 +236,15 @@ void uploadReadings(int moisture, float battery, bool battery_status, const char
     xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
 }
 
+// Runs monitor() in its own task. monitor() does a TLS OTA check + uploads, which
+// need a large stack; the WiFi event-handler task it used to run in is only 2304 B
+// (CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE) and overflowed on the cert-bundle TLS
+// handshake. monitor() normally ends in deep sleep and never returns.
+void monitor_task(void *pvParameters){
+    monitor();
+    vTaskDelete(NULL);
+}
+
 void monitor(){
     // Check for firmwareupdate
     check_update();

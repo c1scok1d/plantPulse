@@ -92,7 +92,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         ESP_LOGI("NTP", "Current time: %s", time_str);  // Log current time
 
-        monitor();  // Call your monitoring function after a successful connection
+        // Run monitor() in its own task with a large stack. Calling it directly
+        // here runs it in the event-loop task (2304 B), which overflows on the
+        // OTA cert-bundle TLS handshake → instant reset.
+        xTaskCreate(monitor_task, "monitor", 16384, NULL, 5, NULL);
 
     }
 }

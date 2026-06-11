@@ -19,5 +19,6 @@ int readMoisture();  // Declaration of readMoisture function
 void check_update();
 void take_reading();  // Declaration of take_reading function
 void monitor();  // Declaration of battery_monitor function
+void monitor_task(void *pvParameters);  // runs monitor() in a task with a TLS-safe stack
 
 #endif
