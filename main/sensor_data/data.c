@@ -1,5 +1,6 @@
 #include "data.h"
 #include "driver/adc.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -159,6 +160,8 @@ void uploadReadingsTask(void *param)
         float battery;
         bool battery_status;
         float crate;            // battery charge rate (%/hr): + charging, - discharging
+        bool usb_present;       // USB_DETECT (GPIO13)
+        bool charging;          // STAT (GPIO14), active-low
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -183,16 +186,19 @@ void uploadReadingsTask(void *param)
     char server_uri[256];
     snprintf(server_uri, sizeof(server_uri), "%s%s", serverName, server_path);
 
-    // Derive a human-readable charge state from the (signed) charge rate.
-    const char *charge_status = (data->crate > 0.5f)  ? "charging"
+    // charge_status keys off the charger STAT line (reliable), with charge rate as
+    // the discharge/idle tiebreaker. power_source is inferred (no solar-sense line).
+    const char *charge_status = data->charging       ? "charging"
                               : (data->crate < -0.5f) ? "discharging"
                               : "idle";
+    const char *power_source  = data->usb_present ? "USB"
+                              : (data->charging   ? "Solar" : "Battery");
 
     // Construct the HTTP request data
     char httpRequestData[512];
     snprintf(httpRequestData, sizeof(httpRequestData),
-             "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d&charge_status=%s",
-             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status, charge_status);
+             "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d&charge_status=%s&power_source=%s",
+             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status, charge_status, power_source);
 
     // Send the POST request
     int httpResponseCode = POST(server_uri, httpRequestData);
@@ -211,7 +217,7 @@ void uploadReadingsTask(void *param)
     vTaskDelete(NULL);
 }
 
-void uploadReadings(int moisture, float battery, bool battery_status, float crate, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
+void uploadReadings(int moisture, float battery, bool battery_status, float crate, bool usb_present, bool charging, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
 {
     // Create a structure to pass the data to the task
     typedef struct {
@@ -219,6 +225,8 @@ void uploadReadings(int moisture, float battery, bool battery_status, float crat
         float battery;
         bool battery_status;
         float crate;
+        bool usb_present;
+        bool charging;
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -237,6 +245,8 @@ void uploadReadings(int moisture, float battery, bool battery_status, float crat
     data->battery = battery;
     data->battery_status = battery_status;
     data->crate = crate;
+    data->usb_present = usb_present;
+    data->charging = charging;
     data->hostname = hostname;
     data->sensorName = sensorName;
     data->sensorLocation = sensorLocation;
@@ -255,6 +265,29 @@ void monitor_task(void *pvParameters){
     vTaskDelete(NULL);
 }
 
+// --- Power-source sensing (board V5 / Schematic.png: USB_DETECT=GPIO13, STAT=GPIO14) ---
+#define USB_DETECT_GPIO  GPIO_NUM_13   // HIGH when USB (VBUS) present
+#define STAT_GPIO        GPIO_NUM_14   // MCP73831 STAT: open-drain, LOW = charging
+
+static void read_power_state(bool *usb_present, bool *charging) {
+    static bool configured = false;
+    if (!configured) {
+        gpio_config_t io = {
+            .pin_bit_mask = (1ULL << USB_DETECT_GPIO),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,     // USB_DETECT is driven by the VBUS divider
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        };
+        gpio_config(&io);
+        io.pin_bit_mask = (1ULL << STAT_GPIO);
+        io.pull_up_en = GPIO_PULLUP_ENABLE;        // STAT is open-drain -> needs a pull-up
+        gpio_config(&io);
+        configured = true;
+    }
+    *usb_present = gpio_get_level(USB_DETECT_GPIO) == 1;
+    *charging    = gpio_get_level(STAT_GPIO) == 0;  // active-low
+}
+
 void monitor(){
     // Check for firmwareupdate
     check_update();
@@ -265,9 +298,11 @@ void monitor(){
     // Read battery and moisture data
     BatteryStatus battery = getBattery();
     int moisture = readMoisture();
+    bool usb_present = false, charging = false;
+    read_power_state(&usb_present, &charging);
 
     // Upload data
-    uploadReadings(moisture, battery.soc, battery.status, battery.crate, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
+    uploadReadings(moisture, battery.soc, battery.status, battery.crate, usb_present, charging, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));  
