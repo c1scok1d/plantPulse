@@ -46,6 +46,26 @@ not effort-ordered.
 
 ## P2 — Robustness & operability
 
+### Confirmed firmware bugs (observed on-device 2026-06-11 — see `docs/DIAGNOSIS-2026-06-11.md`)
+
+- **OTA `check_update` is broken (non-fatal).** On a real boot:
+  `http://…/firmware.json` returns HTTP 200 but `JSON_HANDLER: Error parsing JSON`,
+  then the HTTPS fallback fails at `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED (0x8017)` →
+  `create_ssl_handle failed` → `OTA_CHECK: Failed to fetch version information,
+  HTTP Status: 0`. OTA never runs. Causes: the JSON parser can't handle the
+  response (compounded by the known-buggy chunked branch), and the HTTPS TLS setup
+  fails — likely the pinned cert in `include/cert.h` (`cert_pem2`) is
+  expired/mismatched, or an mbedTLS/heap config issue. Fix: robust JSON parse +
+  repair TLS (refresh the pinned cert or switch to the ESP-IDF cert bundle).
+- **Undersized HTTP response buffer (wastes battery).** During the data POST the
+  firmware logs hundreds of `W HTTP_EVENT: Response buffer overflow, truncating
+  response` when the server returns a large body, staying awake ~5 s spamming the
+  log. Fix: cap/stream the response read and stop logging per-chunk (the data
+  upload doesn't need the response body at all). Relates to the prior commit
+  "removed response.buffer output to log".
+
+### Other P2
+
 - Fix OTA: repair or delete the buggy chunked branch in `check_update`; replace
   the hardcoded `current_version_number` with the build's real version and compare
   semver, not string equality.
@@ -62,7 +82,8 @@ not effort-ordered.
   `docs/FLUTTER_UPGRADE.md`); fold the `wifi_iot → wifi_scan` swap into it.
 - Delete dead `tflite_flutter` classifier files and the stale `install.bat` in the
   app repo.
-- Remove `sdkconfig.old` from the firmware repo.
+- ~~Remove `sdkconfig.old` from the firmware repo.~~ Done — `sdkconfig` and
+  `sdkconfig.old` are now untracked/ignored.
 
 ## Sequencing rationale
 
