@@ -48,15 +48,25 @@ not effort-ordered.
 
 ### Confirmed firmware bugs (observed on-device 2026-06-11 — see `docs/DIAGNOSIS-2026-06-11.md`)
 
-- **OTA `check_update` is broken (non-fatal).** On a real boot:
-  `http://…/firmware.json` returns HTTP 200 but `JSON_HANDLER: Error parsing JSON`,
-  then the HTTPS fallback fails at `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED (0x8017)` →
-  `create_ssl_handle failed` → `OTA_CHECK: Failed to fetch version information,
-  HTTP Status: 0`. OTA never runs. Causes: the JSON parser can't handle the
-  response (compounded by the known-buggy chunked branch), and the HTTPS TLS setup
-  fails — likely the pinned cert in `include/cert.h` (`cert_pem2`) is
-  expired/mismatched, or an mbedTLS/heap config issue. Fix: robust JSON parse +
-  repair TLS (refresh the pinned cert or switch to the ESP-IDF cert bundle).
+- **OTA TLS — FIXED (commit `c3baf43`).** Was failing with
+  `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED (0x8017)` against a stale pinned cert. Now uses
+  `esp_crt_bundle_attach` (the ESP-IDF root-CA bundle, already in sdkconfig) — no
+  pinning, trusts the new host's Let's Encrypt chain, survives LE rotation. The old
+  `cert_pem*` arrays in `include/cert.h` are now unused.
+- **OTA hosting — REBUILT on the new host.** `firmware.json`/`firmware.bin` were
+  static files in SiteGround's docroot (not part of the Laravel app). Now served
+  from `backend/ota/` bind-mounted into the container's `public/`, at
+  `https://athome.rodlandfarms.com/firmware.{json,bin}`. **`version` is now a
+  STRING** (firmware checks `cJSON_IsString`; the old JSON used a number, so OTA
+  never fired). Current published build: `1781210071` (the cert-bundle firmware).
+  Publish a new one: drop a new `ota/firmware.bin` + bump the version string in
+  `ota/firmware.json` — no rebuild.
+- **OTA version compare — STILL fragile (harden).** `check_update` updates whenever
+  `strcmp(json.version, current) != 0` — *any* mismatch, so serving an older version
+  string downgrades devices. Keep `firmware.json.version` == the published bin's
+  version; ideally make the compare monotonic. The **chunked-response branch of
+  `check_update` is still buggy** (realloc/memcpy) — the server returns non-chunked
+  so the working branch is used.
 - **Undersized HTTP response buffer (wastes battery).** During the data POST the
   firmware logs hundreds of `W HTTP_EVENT: Response buffer overflow, truncating
   response` when the server returns a large body, staying awake ~5 s spamming the
