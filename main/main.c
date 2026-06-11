@@ -650,7 +650,7 @@ void enter_deep_sleep(SleepDuration duration){
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
 
-static char current_version_number[] = "1658075072";  // Replace with actual version
+static char current_version_number[] = "1781210071";  // Replace with actual version
 
 void perform_ota_update(){
     char *TAG = "OTA_UPDATE";
