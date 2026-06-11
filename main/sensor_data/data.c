@@ -108,9 +108,11 @@ BatteryStatus getBattery() {
     float soc_actual = soc_raw / 256.0; // Convert to percentage
     batteryStatus.soc = soc_actual ;
 
-    // Read CRATE register (Charge/Discharge rate)
-    uint16_t crate_raw = max17048_read_register(REG_CRATE);
-    float crate_actual = crate_raw / 256.0; // Convert to percentage
+    // Read CRATE register (Charge/Discharge rate). CRATE is SIGNED two's-complement:
+    // positive = charging, negative = discharging; LSB = 0.208 %/hr. (Reading it as
+    // unsigned/256 made discharge show as garbage like "13620 %/hr".)
+    int16_t crate_raw = (int16_t)max17048_read_register(REG_CRATE);
+    float crate_actual = crate_raw * 0.208f;
     batteryStatus.crate = crate_actual;
 
     // Read STATE register (Battery state)
@@ -156,12 +158,13 @@ void uploadReadingsTask(void *param)
         int moisture;
         float battery;
         bool battery_status;
+        float crate;            // battery charge rate (%/hr): + charging, - discharging
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
         const char* apiToken;
     } upload_data_t;
-    
+
     upload_data_t *data = (upload_data_t *)param;
 
     const char *serverName = "http://athome.rodlandfarms.com";
@@ -180,11 +183,16 @@ void uploadReadingsTask(void *param)
     char server_uri[256];
     snprintf(server_uri, sizeof(server_uri), "%s%s", serverName, server_path);
 
+    // Derive a human-readable charge state from the (signed) charge rate.
+    const char *charge_status = (data->crate > 0.5f)  ? "charging"
+                              : (data->crate < -0.5f) ? "discharging"
+                              : "idle";
+
     // Construct the HTTP request data
     char httpRequestData[512];
     snprintf(httpRequestData, sizeof(httpRequestData),
-             "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d",
-             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status);
+             "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d&charge_status=%s",
+             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status, charge_status);
 
     // Send the POST request
     int httpResponseCode = POST(server_uri, httpRequestData);
@@ -203,13 +211,14 @@ void uploadReadingsTask(void *param)
     vTaskDelete(NULL);
 }
 
-void uploadReadings(int moisture, float battery, bool battery_status, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
+void uploadReadings(int moisture, float battery, bool battery_status, float crate, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
 {
     // Create a structure to pass the data to the task
     typedef struct {
         int moisture;
         float battery;
         bool battery_status;
+        float crate;
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -227,6 +236,7 @@ void uploadReadings(int moisture, float battery, bool battery_status, const char
     data->moisture = moisture;
     data->battery = battery;
     data->battery_status = battery_status;
+    data->crate = crate;
     data->hostname = hostname;
     data->sensorName = sensorName;
     data->sensorLocation = sensorLocation;
@@ -257,7 +267,7 @@ void monitor(){
     int moisture = readMoisture();
 
     // Upload data
-    uploadReadings(moisture, battery.soc, battery.status, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
+    uploadReadings(moisture, battery.soc, battery.status, battery.crate, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));  
