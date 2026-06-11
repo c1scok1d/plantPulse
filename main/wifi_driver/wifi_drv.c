@@ -140,9 +140,10 @@ esp_err_t wifi_connect()
 
 
     // If STATIC_PASSWORD is defined, use that
-    #if STATIC_PASSWORD
+    #ifdef STATIC_PASSWORD
+        strncpy((char *)wifi_config.sta.ssid, STATIC_SSID, sizeof(wifi_config.sta.ssid) - 1);
         strncpy((char *)wifi_config.sta.password, STATIC_PASSWORD, sizeof(wifi_config.sta.password) - 1);
-        ESP_LOGI(TAG, "Using Static Password: %s", STATIC_PASSWORD);
+        ESP_LOGI(TAG, "Using Static SSID: %s", STATIC_SSID);
     #else
         ESP_LOGI(TAG, "Static PASSWORD not set. Checking NVS settings.");
         // If STATIC_PASSWORD is not defined, fall back to main_struct.password
