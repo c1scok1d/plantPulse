@@ -1,6 +1,28 @@
 # Backend migration assessment — RodlandFarmsAPI → local fleet
 
-**Status: exploration / proposal.** Moving the PlantPulse backend
+## ✅ CUTOVER COMPLETE — 2026-06-11
+
+The backend is **live on the local fleet**. Stack in `~/Desktop/plantPulse/backend/`:
+`rodland_api_app` (php:8.2) on `127.0.0.1:8003` + `rodland_api_db` (mysql:8.4) on
+`3308`; system nginx vhost `athome.rodlandfarms.com` (HTTP proxied **without**
+HTTPS redirect so the firmware's plain-HTTP POST works; LE cert via certbot
+`--no-redirect`). Live code rsynced (prod hand-edits, not the stale GitHub repo);
+prod DB imported; `APP_KEY` preserved. Outage fixed (Carbon bump) + MySQL 8.4
+`sql_mode` fixed via `config/database.php` `modes` (not the vendor hack). Verified
+end-to-end through the edge: app `GET /api/user/devices` (HTTPS) and firmware
+`POST /api/esp/data` (HTTP) both return JSON; readings store.
+
+**Remaining:** (1) refresh firmware OTA pinned cert (`include/cert.h`) to the new
+LE chain — OTA HTTPS fails until then; (2) add athome to qstatus + a drift
+tripwire; (3) decommission SiteGround (no data gap — it was 500-ing, not storing);
+(4) optional container polish (skip `migrate`/add doctrine-dbal, `config:cache`,
+set a compose project name).
+
+---
+
+**Original assessment (below) — superseded by the cutover above.**
+
+Moving the PlantPulse backend
 (`athome.rodlandfarms.com`, Laravel `RodlandFarmsAPI`) off cPanel shared hosting
 onto the local Ubuntu fleet box (Docker behind the shared system nginx, alongside
 the CRM, fitness, qr-generator, and tts stacks).
