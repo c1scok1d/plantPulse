@@ -22,7 +22,7 @@ idf.py --version            # confirm it's active
 ## Build / flash / monitor
 
 ```bash
-cd ~/Desktop/plantPulse/plantPulse
+cd ~/Desktop/plantPulse/firmware
 idf.py set-target esp32s3   # only on a fresh build/ (sdkconfig is gitignored)
 idf.py build
 idf.py -p <PORT> flash monitor   # Ctrl-] to exit the monitor
