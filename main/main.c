@@ -645,6 +645,7 @@ void enter_deep_sleep(SleepDuration duration){
 
 #include <string.h>
 #include "esp_https_ota.h"
+#include "esp_crt_bundle.h"   // trust the ESP-IDF root-CA bundle instead of pinning a cert
 
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
@@ -657,7 +658,7 @@ void perform_ota_update(){
     
     esp_http_client_config_t config = {
         .url = OTA_URL,
-        .cert_pem = cert_pem2,
+        .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 5000,
     };
 
@@ -684,8 +685,8 @@ void check_update(void *pvParameters) {
     ESP_LOGI(TAG, "Checking for firmware updates...");
 
     esp_http_client_config_t http_config = {
-        .url = "http://athome.rodlandfarms.com/firmware.json",
-        .cert_pem = cert_pem2,
+        .url = JSON_URL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 3000,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
     };
