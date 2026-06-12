@@ -7,6 +7,7 @@
 #include "esp_event.h"
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
+#include "driver/rtc_io.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_nimble_hci.h"
@@ -479,6 +480,9 @@ void erase_nvs_data() {
 
 // Function to configure GPIO for the button
 void configure_button_gpio() {
+    // Release any RTC hold left on the pin by enter_deep_sleep() so the button is usable
+    // while awake (the hold keeps IO3 pulled high across deep sleep for ext0 wake).
+    rtc_gpio_hold_dis(BUTTON_GPIO);
     esp_rom_gpio_pad_select_gpio(BUTTON_GPIO);
     gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
     gpio_set_pull_mode(BUTTON_GPIO, GPIO_PULLUP_ONLY);  // Pull-up to avoid floating state
@@ -616,27 +620,27 @@ void enter_deep_sleep(SleepDuration duration){
 
     ESP_LOGI(TAG, "Entering deep sleep mode for %d seconds...", duration);
     
-    // Disable unused peripherals
+    // Disable Wi-Fi before sleeping
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // Enable Wi-Fi power saving
     esp_wifi_stop(); // disable wifi driver
 
-
-    // Set all unused GPIOs to reduce power leakage
-    for (int i = 0; i < 48; i++) {  // ESP32-S3 has 48 GPIOs
-        if (i != BUTTON_GPIO) {  // Keep wakeup GPIO active
-            gpio_reset_pin(i);
-            gpio_set_direction(i, GPIO_MODE_INPUT);
-            gpio_pulldown_dis(i);
-            gpio_pullup_dis(i);
-        }
-    }
+    // NOTE: Do NOT manually gpio_reset_pin() every GPIO here. The old loop iterated all
+    // 48 pins, which reset the USB pins (IO19/20) and — fatally — the in-package SPI
+    // flash pins, crashing the chip mid-loop before it ever slept. That was the real
+    // cause of the ~10s reboot loop. ESP-IDF already isolates GPIOs in deep sleep
+    // (sdkconfig "Configure to isolate all GPIO pins in sleep state"), so no manual
+    // isolation is needed for leakage.
 
     // Configure the RTC timer to wake up after the specified sleep duration
     esp_sleep_enable_timer_wakeup(sleep_duration_us);
 
-    // Configure the button GPIO to wake up the device on a button press (active low)
-    esp_sleep_enable_ext0_wakeup(BUTTON_GPIO, 0);  // 0 for active low, 1 for active high
-
+    // Wake on button press (SW1 on IO3, active low). IO3 has only a 100nF debounce cap
+    // and no external pull-up, so enable the RTC pull-up and hold it across deep sleep so
+    // the pin doesn't float low and wake us spuriously.
+    rtc_gpio_pullup_en(BUTTON_GPIO);
+    rtc_gpio_pulldown_dis(BUTTON_GPIO);
+    rtc_gpio_hold_en(BUTTON_GPIO);
+    esp_sleep_enable_ext0_wakeup(BUTTON_GPIO, 0);  // 0 = wake on active-low (button pressed)
 
     // Enter deep sleep
     esp_deep_sleep_start();
@@ -650,7 +654,7 @@ void enter_deep_sleep(SleepDuration duration){
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
 
-static char current_version_number[] = "1781210071";  // Replace with actual version
+static char current_version_number[] = "1781229549";  // V5: fix deep-sleep crash loop (drop GPIO-reset loop); 8h sleep
 
 void perform_ota_update(){
     char *TAG = "OTA_UPDATE";
