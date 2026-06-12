@@ -153,8 +153,9 @@ swap folded in); installs and runs on the S23. A startup crash from the
 handle) was fixed with a top-level `@pragma('vm:entry-point')` handler.
 
 **Backend note:** `athome.rodlandfarms.com` was 500-ing on 2026-06-11 (PHP 8.2 +
-old `nesbot/carbon`; see `docs/DIAGNOSIS-2026-06-11.md`) but is **back up as of
-2026-06-12** — all endpoints return clean JSON. The remaining edge is that a device
-provisioned during the outage may hold a stale `api_token`; re-login + re-provision
-to refresh it. Migrating the backend onto the local fleet (`docs/BACKEND-MIGRATION.md`)
-is still the durable fix for the shared-host PHP-auto-upgrade risk.
+old `nesbot/carbon`; see `docs/DIAGNOSIS-2026-06-11.md`). It has since been
+**migrated off SiteGround onto the local Docker fleet** (`~/Desktop/plantPulse/backend/`,
+app on `127.0.0.1:8003`, DNS cut over to this box) and is **up and serving clean JSON
+as of 2026-06-12** — the shared-host PHP-auto-upgrade risk is now gone. Full record in
+`docs/BACKEND-MIGRATION.md`. Remaining edge: a device provisioned while the API was down
+may hold a stale `api_token`; re-login + re-provision to refresh it.
