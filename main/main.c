@@ -721,7 +721,7 @@ void enter_deep_sleep(uint32_t seconds){
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
 
-static char current_version_number[] = "1781279162";  // provisioned-confirm notify on 0xFEF9 after config save
+static char current_version_number[] = "1781292685";  // provisioned-confirm notify on 0xFEF9 after config save
 
 void perform_ota_update(void);  // forward declaration
 

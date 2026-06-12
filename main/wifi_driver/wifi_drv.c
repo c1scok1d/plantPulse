@@ -25,6 +25,16 @@ const int WIFI_FAIL_BIT = BIT1;
 
 esp_err_t wifi_connect();
 
+// ble_advert() initialises the NimBLE host stack, which is too heavy to run inside
+// the 2304 B system-event task — doing so overflows the stack and resets the chip in
+// a loop (same class of bug already fixed for monitor() by giving it its own task).
+// Spawn BLE init in a task with a real stack instead.
+static void ble_advert_task(void *arg)
+{
+    ble_advert();
+    vTaskDelete(NULL);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -62,8 +72,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 // Delay to allow time for error logging and BLE advertisement setup
                 //vTaskDelay(1000);
 
-                // Trigger BLE advertising for provisioning
-                ble_advert();
+                // Trigger BLE advertising for provisioning — in its own task so the
+                // heavy NimBLE init doesn't overflow this 2304 B system-event task.
+                xTaskCreate(ble_advert_task, "ble_advert", 8192, NULL, 5, NULL);
 
                 // Optionally restart the Wi-Fi or device to retry the configuration
                 // esp_restart();
@@ -153,7 +164,7 @@ esp_err_t wifi_connect()
             main_struct.isProvisioned = false;
             esp_wifi_stop();  // Stop the Wi-Fi driver
             ESP_LOGI(TAG, "Wi-Fi disabled.");
-            ble_advert();  // Start BLE advertising for provisioning
+            xTaskCreate(ble_advert_task, "ble_advert", 8192, NULL, 5, NULL);  // BLE provisioning (own task)
             return ESP_ERR_WIFI_NOT_CONNECT;  // Return error code to indicate failure to connect
         }
         strncpy((char *)wifi_config.sta.password, main_struct.password, sizeof(wifi_config.sta.password) - 1);
