@@ -40,12 +40,16 @@ not effort-ordered.
 
 ## P1 — Close the credential exposure
 
-- Gate `0xFEFA` behind BLE encryption / bonding (`F_WRITE_ENC`) so provisioning is
-  not cleartext.
-- Move telemetry upload to **HTTPS** (reuse the pinned-cert path already used for
-  OTA in `include/cert.h`).
-- Harden JSON reassembly (length-prefix or explicit end marker) so a `}` inside a
-  password can't trigger an early/failed parse.
+- **Telemetry upload → HTTPS — DONE (commit `35cc0c3`).** The data POST now uses
+  `https://` with `esp_crt_bundle_attach` (same root-CA path as OTA); server confirmed
+  accepting it. Was plain HTTP with the api_token in the body.
+- **JSON reassembly hardened — DONE (commit `35cc0c3`).** BLE config reassembly now
+  commits on `cJSON_Parse` success (string-aware) instead of a trailing `}`, so a `}`
+  inside a value at a chunk boundary can't trigger an early/failed parse.
+- **BLE provisioning encryption — STILL OPEN (high-risk, needs device).** Gate `0xFEFA`
+  behind BLE encryption/bonding (`F_WRITE_ENC`) + app-side pairing so the WiFi password
+  and api_token aren't written in the clear. Must be implemented with a board + phone in
+  hand and a real pairing test before any field OTA — a mismatch bricks provisioning.
 
 ## P2 — Robustness & operability
 
@@ -76,42 +80,52 @@ not effort-ordered.
   `ota/firmware.json` — no rebuild. Versions are **unix timestamps** so a release is
   self-dating. Confirmed OTA works in practice: both bench devices pulled and applied
   `1781229549` over the air.
-- **OTA version compare — STILL fragile (harden).** `check_update` updates whenever
-  `strcmp(json.version, current) != 0` — *any* mismatch, so serving an older version
-  string downgrades devices. Keep `firmware.json.version` == the published bin's
-  version; ideally make the compare monotonic. The **chunked-response branch of
-  `check_update` is still buggy** (realloc/memcpy) — the server returns non-chunked
-  so the working branch is used.
-- **Undersized HTTP response buffer (wastes battery).** During the data POST the
-  firmware logs hundreds of `W HTTP_EVENT: Response buffer overflow, truncating
-  response` when the server returns a large body, staying awake ~5 s spamming the
-  log. Fix: cap/stream the response read and stop logging per-chunk (the data
-  upload doesn't need the response body at all). Relates to the prior commit
-  "removed response.buffer output to log".
+- **OTA version compare — FIXED (commit `35cc0c3`).** Now monotonic: versions are unix
+  timestamps and `check_update` only updates when server > current (no downgrade).
+  Replaced the buggy chunked branch (read into an unallocated pointer; self-`memcpy`)
+  with one small fixed-buffer read that handles both response types; uncommented
+  `esp_http_client_cleanup`.
+- **Undersized HTTP response buffer — FIXED (commit `35cc0c3`).** The POST handler no
+  longer copies the response body into a fixed 2 KB stack buffer (no bounds check →
+  overflow + ~5 s wasted wake on large error pages). The upload only needs the status
+  code, so the body is ignored.
+- **Provisioned-✓ notify — DONE (commit `061f3a2` fw / `d8eb599` app).** Firmware
+  notifies the hostname on `0xFEF9` after saving config; the app subscribes, shows
+  "provisioned ✓", and registers the device. (Internet-connectivity confirmation is a
+  separate follow-up — see bottom.)
 
 ### Other P2
 
-- Fix OTA: repair or delete the buggy chunked branch in `check_update`; replace
-  the hardcoded `current_version_number` with the build's real version and compare
-  semver, not string equality.
-- Make sleep duration an NVS/config value instead of a compile-time comment
-  toggle (`SleepDuration` enum in `include/main.h`).
-- Resolve the `batteryInserted` TODO from the firmware history.
-- Minimal CI: `flutter analyze` + `flutter test` on the app, a compile check on
-  the firmware, and one **BLE-contract regression test** asserting the app's
-  service/char UUIDs and JSON keys match the firmware's.
+- ~~Fix OTA chunked branch + monotonic version compare.~~ **DONE (`35cc0c3`).**
+- ~~Make sleep duration an NVS/config value.~~ **DONE (`35cc0c3`)** — `nvs_get/set_sleep_seconds`
+  (default 8 h), settable via an optional `sleep_seconds` key in the provisioning JSON.
+- ~~Resolve the `batteryInserted` TODO.~~ No such TODO remained in the code.
+- ~~Minimal CI + BLE-contract regression test.~~ **DONE** — `firmware-build.yml`
+  (ESP-IDF build) and `app-ci.yml` (`flutter analyze`/`test`); `test/ble_contract_test.dart`
+  asserts the UUIDs + JSON keys match the firmware (contract extracted to
+  `lib/ui/devices/ble_provisioning_contract.dart`).
 
 ## P3 — Maintainability
 
-- Execute the Flutter upgrade (scoped in the app repo's
-  `docs/FLUTTER_UPGRADE.md`); fold the `wifi_iot → wifi_scan` swap into it.
-- Delete dead `tflite_flutter` classifier files and the stale `install.bat` in the
-  app repo.
-- ~~Remove `sdkconfig.old` from the firmware repo.~~ Done — `sdkconfig` and
-  `sdkconfig.old` are now untracked/ignored.
+- **Flutter upgrade — STILL OPEN (needs device).** Phased 3.10→3.16→3.22 per the app
+  repo's `docs/FLUTTER_UPGRADE.md`; fold the `wifi_iot → wifi_scan` swap in. Firebase /
+  google_sign_in / vendored-formz are the landmines; needs on-device smoke tests each hop.
+- ~~Delete dead `tflite_flutter` files + stale `install.bat`; drop unused models.~~
+  **DONE (app `67f8cd9`)** — removed the 4 commented `tflite_flutter` files, `install.bat`,
+  and 3 unused 23 MB `.tflite` models (~67 MB). Live ML path (`model_v4_3` via ML Kit) kept.
+- ~~Remove `sdkconfig.old` from the firmware repo.~~ Done.
 
-## Sequencing rationale
+## Follow-ups / deferred
 
-P0 first because shipping an unverified protocol change is the active risk; P1
-next because cleartext credentials are the highest-severity standing issue;
-P2/P3 are debt stable enough to schedule.
+- **Verify internet connectivity at provisioning (deferred).** Beyond "config saved",
+  confirm the device actually reaches the backend and surface "online ✓" in the app.
+  Options: (A) app polls `GET /user/{hostname}/latest` until the first reading [recommended,
+  testable]; (B) firmware WiFi/BLE-coex HTTPS check during the BLE session notifying
+  ONLINE/OFFLINE on `0xFEF9`; (C) both. Builds on the `0xFEF9` hostname notify.
+
+## Status (2026-06-11)
+
+P0 ✅ done · P1 ✅ except BLE-provisioning encryption (needs device) · P2 ✅ done ·
+P3: app cleanup ✅, Flutter upgrade open (needs device). The two remaining items —
+**BLE provisioning encryption** and the **Flutter upgrade** — both require a board +
+phone in hand; the rest shipped and (where on-device-verifiable) was verified.
