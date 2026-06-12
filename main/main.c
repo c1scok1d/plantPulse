@@ -260,7 +260,9 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .uuid = BLE_UUID16_DECLARE(HOSTNAME_UUID),
                 .access_cb = device_read,
                 .val_handle = &hostname_attr_handle, // Assign handle
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                // READ requires encryption: the app reads this first, which establishes
+                // the encrypted link (pairing) BEFORE it writes config — no write retry.
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
             },
             {
                 .uuid = BLE_UUID16_DECLARE(JSON_CONFIG_UUID),
@@ -321,8 +323,9 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg){
             g_conn_handle = event->connect.conn_handle;
             ESP_LOGI("BLE", "Connection handle: %d", g_conn_handle);
             //ble_gattc_exchange_mtu(event->connect.conn_handle, MAX_MTU);
-            get_wifi_mac_address();
-            send_hostname();
+            get_wifi_mac_address();   // populate hostname so the encrypted READ returns it
+            // No connect-time notify: the app READs 0xFEF9 (which pairs), then writes
+            // config; the confirmation notify is sent from device_write after save.
         } else {
             ble_advert();
         }
