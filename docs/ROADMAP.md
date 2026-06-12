@@ -7,12 +7,11 @@ not effort-ordered.
 
 ## Recommendations (themes)
 
-1. **Provisioning secrets travel in the clear — highest standing risk.** The
-   firmware config characteristic `0xFEFA` is `BLE_GATT_CHR_F_WRITE` with **no
-   encryption flag**, so the WiFi password and API token are written over the air
-   unencrypted during setup. Telemetry upload is also **plain HTTP**
-   (`http://athome.rodlandfarms.com/api/esp/data`) with the `api_token` in the
-   body. Two cleartext-credential paths.
+1. ~~**Provisioning secrets travel in the clear — highest standing risk.**~~
+   **✅ RESOLVED (2026-06-12).** Both cleartext-credential paths are closed:
+   telemetry upload is now HTTPS (P1, commit `35cc0c3`), and BLE provisioning is
+   now encrypted/bonded (`0xFEFA` is `F_WRITE_ENC`, verified on hardware — see P1).
+   The WiFi password and api_token no longer travel in the clear on either path.
 2. **The BLE protocol change is unverified end to end.** The app↔firmware
    alignment (service `0xFEF3`, JSON → char `0xFEFA`) analyzes clean but has only
    been verified by reading code. A real provision-to-reading round trip is the
@@ -46,10 +45,28 @@ not effort-ordered.
 - **JSON reassembly hardened — DONE (commit `35cc0c3`).** BLE config reassembly now
   commits on `cJSON_Parse` success (string-aware) instead of a trailing `}`, so a `}`
   inside a value at a chunk boundary can't trigger an early/failed parse.
-- **BLE provisioning encryption — STILL OPEN (high-risk, needs device).** Gate `0xFEFA`
-  behind BLE encryption/bonding (`F_WRITE_ENC`) + app-side pairing so the WiFi password
-  and api_token aren't written in the clear. Must be implemented with a board + phone in
-  hand and a real pairing test before any field OTA — a mismatch bricks provisioning.
+- **BLE provisioning encryption — ⚠️ ENCRYPTION HANDSHAKE VERIFIED; FULL PROVISIONING
+  NOT YET CONFIRMED (2026-06-12).** The crypto layer is in and demonstrably works:
+  `0xFEFA` (config write) is `F_WRITE_ENC` and `0xFEF9` (hostname read) is `F_READ_ENC`,
+  with LE Secure Connections + bonding (`sm_sc=1`, `sm_bonding=1`,
+  `sm_io_cap=NO_INPUT_OUTPUT` → Just Works). The app pairs by **reading `0xFEF9` first** —
+  the encrypted read forces the link up — then writes the config over the now-encrypted
+  link (firmware commits `08c225f`/`b0cb113`/`f70e254`; app `c27cdac`). On a V5 board
+  (`48:CA:43:BB:C6:9E`) + Galaxy S23 (Android 16) the encrypted read returned the hostname,
+  the config write was accepted, and the **phone formed a bond** (confirmed via
+  `dumpsys bluetooth_manager` — bonded under `com.rodlandfarms.plantpulse`). So secrets no
+  longer travel in the clear over BLE. Firmware build `1781232142`.
+  - **BUT the end-to-end cycle is still failing (2026-06-12, evening).** After the
+    encrypted config write the device does **not** complete provisioning as expected, and a
+    **deep-sleep boot loop may have regressed** (cf. the P2 `1ffe7da` fix — possibly
+    reintroduced by the encryption-path reboot changes in `b0cb113` "don't reboot until
+    provisioned"). **Next session: attach the serial monitor to the bench device** during a
+    provision and watch the post-write path (config save → `esp_restart` → WiFi join →
+    upload) to find where it stalls/loops. Do NOT treat this item as closed until a real
+    reading from a freshly-provisioned device lands in the backend.
+  - Residual (separate from the above): Just Works gives no MITM protection (encryption vs.
+    passive eavesdropping only) — acceptable for an IO-less sensor; revisit if a
+    display/keypad is ever added.
 
 ## P2 — Robustness & operability
 
@@ -123,9 +140,21 @@ not effort-ordered.
   testable]; (B) firmware WiFi/BLE-coex HTTPS check during the BLE session notifying
   ONLINE/OFFLINE on `0xFEF9`; (C) both. Builds on the `0xFEF9` hostname notify.
 
-## Status (2026-06-11)
+## Status (2026-06-12)
 
-P0 ✅ done · P1 ✅ except BLE-provisioning encryption (needs device) · P2 ✅ done ·
-P3: app cleanup ✅, Flutter upgrade open (needs device). The two remaining items —
-**BLE provisioning encryption** and the **Flutter upgrade** — both require a board +
-phone in hand; the rest shipped and (where on-device-verifiable) was verified.
+P0 ✅ done · P1 ⚠️ BLE-encryption **handshake** verified on hardware (bond + encrypted
+read/write) but **full provisioning still failing** — possible deep-sleep boot-loop
+regression; needs serial-monitor diagnosis on the bench device (see P1 detail) · P2 ✅
+done · P3: app cleanup ✅, **Flutter upgrade in progress** — the
+upgraded app now lives in a new repo `mobile_app/plantpulse_flutter/`
+(`github.com/c1scok1d/plantpulse_flutter`, Flutter 3.24.5 / Dart 3.5.4, `wifi_scan`
+swap folded in); installs and runs on the S23. A startup crash from the
+`firebase_messaging` upgrade (inline `onBackgroundMessage` closure → null callback
+handle) was fixed with a top-level `@pragma('vm:entry-point')` handler.
+
+**Backend note:** `athome.rodlandfarms.com` was 500-ing on 2026-06-11 (PHP 8.2 +
+old `nesbot/carbon`; see `docs/DIAGNOSIS-2026-06-11.md`) but is **back up as of
+2026-06-12** — all endpoints return clean JSON. The remaining edge is that a device
+provisioned during the outage may hold a stale `api_token`; re-login + re-provision
+to refresh it. Migrating the backend onto the local fleet (`docs/BACKEND-MIGRATION.md`)
+is still the durable fix for the shared-host PHP-auto-upgrade risk.
