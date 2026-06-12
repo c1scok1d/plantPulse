@@ -43,15 +43,23 @@ int POST(const char* server_uri, const char* to_send)
     esp_http_client_handle_t http_client_post;
 
     esp_http_client_config_t config = {
+        .url = server_uri,                           // REQUIRED at init time: without a URL
+                                                     // (or host+path) esp_http_client_init()
+                                                     // returns NULL and the set_* calls below
+                                                     // dereference it -> StoreProhibited panic.
         .event_handler = _http_event_handler_post,
         .crt_bundle_attach = esp_crt_bundle_attach,  // validate TLS for https:// uploads
         .timeout_ms = 8000,
     };
 
     http_client_post = esp_http_client_init(&config);
+    if (http_client_post == NULL) {
+        // Don't crash-loop the whole device on a bad/empty URL — skip this upload.
+        ESP_LOGE(TAG, "esp_http_client_init failed (uri='%s')", server_uri ? server_uri : "(null)");
+        return -1;
+    }
 
     // Ensure no mutex is held before performing this
-    esp_http_client_set_url(http_client_post, server_uri);
     esp_http_client_set_method(http_client_post, HTTP_METHOD_POST);
     esp_http_client_set_header(http_client_post, "Content-Type", "application/x-www-form-urlencoded");
     esp_http_client_set_post_field(http_client_post, to_send, strlen(to_send));
