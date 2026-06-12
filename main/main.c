@@ -136,6 +136,7 @@ static char json_buffer[MAX_JSON_SIZE] = {0};
 static int json_index = 0;  // Track buffer position
 
 static void send_hostname(void);  // forward decl: notify hostname on 0xFEF9
+void ble_app_advertise(void);     // forward decl: (re)start BLE advertising
 extern void ble_store_config_init(void);  // NimBLE key/bond store init (ESP-IDF provides it)
 
 
@@ -329,11 +330,20 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg){
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "CONNECTED!" : "DISCONNECTED!");
-        ESP_LOGI("GAP", "Rebooting...");
-        vTaskDelay(100);
-        esp_restart();
-
+        ESP_LOGI("GAP", "BLE GAP EVENT DISCONNECT (reason=%d)", event->disconnect.reason);
+        g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        if (main_struct.isProvisioned) {
+            // Config was saved (set in device_write after parse_json). Reboot to join WiFi.
+            ESP_LOGI("GAP", "Provisioned -> rebooting to join WiFi.");
+            vTaskDelay(100);
+            esp_restart();
+        } else {
+            // Disconnected BEFORE provisioning finished — e.g. a drop during BLE pairing.
+            // Don't reboot (that would wipe progress and the LED would just keep
+            // flashing); keep advertising so the app can reconnect and finish.
+            ESP_LOGW("GAP", "Disconnected before provisioning -> re-advertising.");
+            ble_app_advertise();
+        }
         break;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
