@@ -145,9 +145,19 @@ not effort-ordered.
 
 ## P3 — Maintainability
 
-- **Flutter upgrade — STILL OPEN (needs device).** Phased 3.10→3.16→3.22 per the app
-  repo's `docs/FLUTTER_UPGRADE.md`; fold the `wifi_iot → wifi_scan` swap in. Firebase /
-  google_sign_in / vendored-formz are the landmines; needs on-device smoke tests each hop.
+- **Temp/humidity/VPD sensor — BLOCKED ON HARDWARE (V6), app already ready.** Gap
+  assessment (2026-06-12) found the app ships temperature/humidity/VPD charts + a disease
+  catalog keyed on temp/humidity, but **V5 has no RH/T sensor** (I²C bus = MAX17048 only),
+  so those fields are always null. App side is **DONE**: `IoT_monitoring_page`/`Records`
+  were made null-safe (commit app `31ed455`) so the cards hide when absent and light up
+  automatically when data arrives. Firmware/hardware side is a **turnkey V6 task**: add an
+  SHT40 (`0x44`) on the existing I²C bus (SDA16/SCL17), probe-gate it in `monitor()` so V5
+  stays unchanged, read T/RH, compute VPD, append `temp/humid/vpd` to the POST. Full plan
+  (formulae, units, steps) in `hardware/README.md` → "V6 recommendation". Don't ship the
+  driver until a board with the sensor exists to validate the read path.
+- **Flutter upgrade — IN PROGRESS (now `mobile_app/plantpulse_flutter/`, Flutter 3.24.5).**
+  The upgraded app exists as its own repo (`wifi_iot → wifi_scan` folded in); the old
+  `Plant_Pulse` was removed. Remaining: on-device smoke-tests across screens.
 - ~~Delete dead `tflite_flutter` files + stale `install.bat`; drop unused models.~~
   **DONE (app `67f8cd9`)** — removed the 4 commented `tflite_flutter` files, `install.bat`,
   and 3 unused 23 MB `.tflite` models (~67 MB). Live ML path (`model_v4_3` via ML Kit) kept.
