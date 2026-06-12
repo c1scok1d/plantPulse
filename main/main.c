@@ -721,7 +721,7 @@ void enter_deep_sleep(uint32_t seconds){
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
 
-static char current_version_number[] = "1781276957";  // provisioned-confirm notify on 0xFEF9 after config save
+static char current_version_number[] = "1781279162";  // provisioned-confirm notify on 0xFEF9 after config save
 
 void perform_ota_update(void);  // forward declaration
 
@@ -783,17 +783,20 @@ void check_update(void *pvParameters) {
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     esp_http_client_set_method(client, HTTP_METHOD_GET);
 
-    esp_err_t err = esp_http_client_perform(client);
-    
-    if (err == ESP_OK) {
-        int status_code = esp_http_client_get_status_code(client);
-         
-        ESP_LOGI(TAG, "HTTP Response Code: %d", status_code); 
+    // Use open/fetch_headers/read — NOT esp_http_client_perform(). perform() runs the
+    // whole transaction and consumes the body internally, so a subsequent
+    // esp_http_client_read() returns 0 (the old code did exactly that -> always logged
+    // "Empty firmware.json response", so OTA never fired even though the server sent a
+    // valid manifest). open()+fetch_headers() leaves the body for us to read().
+    esp_err_t err = esp_http_client_open(client, 0);  // 0 = no request body (GET)
 
-        // Read firmware.json with esp_http_client_read into a small fixed buffer (the
-        // file is tiny). Works for chunked and non-chunked responses and replaces the
-        // old buggy chunked branch (it read into an unallocated pointer and memcpy'd a
-        // buffer onto itself).
+    if (err == ESP_OK) {
+        esp_http_client_fetch_headers(client);   // must run before read() / get_status_code()
+        int status_code = esp_http_client_get_status_code(client);
+
+        ESP_LOGI(TAG, "HTTP Response Code: %d", status_code);
+
+        // firmware.json is tiny; a small fixed buffer is plenty. Loop until EOF.
         char buffer[256] = {0};
         int total_read = 0, bytes_read = 0;
         while (total_read < (int)sizeof(buffer) - 1 &&
@@ -803,7 +806,7 @@ void check_update(void *pvParameters) {
         }
         buffer[total_read] = '\0';
 
-        if (total_read > 0) {
+        if (status_code == 200 && total_read > 0) {
             ESP_LOGI(TAG, "Received JSON: %s", buffer);
             cJSON *json = cJSON_Parse(buffer);
             if (json) {
@@ -818,10 +821,11 @@ void check_update(void *pvParameters) {
                 ESP_LOGE(TAG, "JSON Parsing Error");
             }
         } else {
-            ESP_LOGE(TAG, "Empty firmware.json response");
+            ESP_LOGE(TAG, "Empty/failed firmware.json response (status=%d, read=%d)", status_code, total_read);
         }
+        esp_http_client_close(client);
     } else {
-        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
     }
 
     esp_http_client_cleanup(client);
