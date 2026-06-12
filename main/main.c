@@ -16,6 +16,7 @@
 #include "host/ble_hs.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "store/config/ble_store_config.h"   // key/bond store for BLE pairing
 #include "sdkconfig.h"
 #include "cJSON.h"
 #include "main.h"
@@ -135,6 +136,7 @@ static char json_buffer[MAX_JSON_SIZE] = {0};
 static int json_index = 0;  // Track buffer position
 
 static void send_hostname(void);  // forward decl: notify hostname on 0xFEF9
+extern void ble_store_config_init(void);  // NimBLE key/bond store init (ESP-IDF provides it)
 
 
 // Try to parse the accumulated provisioning JSON.
@@ -261,7 +263,8 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
             },
             {
                 .uuid = BLE_UUID16_DECLARE(JSON_CONFIG_UUID),
-                .flags = BLE_GATT_CHR_F_WRITE,
+                // Require an encrypted link to write config (creds travel encrypted).
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC,
                 .access_cb = device_write,
             },
             {0} // Terminating the characteristics array
@@ -330,8 +333,25 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg){
         ESP_LOGI("GAP", "Rebooting...");
         vTaskDelay(100);
         esp_restart();
-        
+
         break;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        // Link encryption (pairing) completed or changed.
+        ESP_LOGI("GAP", "Encryption change; status=%d", event->enc_change.status);
+        break;
+
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+        // The peer (phone) is bonded but we lost the keys (RAM store cleared by the
+        // reboot after each provisioning). Delete the stale bond and let it re-pair so
+        // re-provisioning always works.
+        {
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+                ble_store_util_delete_peer(&desc.peer_id_addr);
+            }
+            return BLE_GAP_REPEAT_PAIRING_RETRY;
+        }
     // Advertise again after completion of the event/advertisement
     case BLE_GAP_EVENT_ADV_COMPLETE:
         ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
@@ -624,7 +644,19 @@ void ble_advert(void){
     //ble_hs_cfg.attr_tab_cfg.max_attr = 64;  // Ensure enough attributes for GATT
     ble_att_set_preferred_mtu(256);  // Set before stack sync
 
-    // Start NimBLE host task thread and return 
+    // BLE security: the config characteristic (0xFEFA) requires an ENCRYPTED link
+    // (BLE_GATT_CHR_F_WRITE_ENC in gatt_svcs[]), so the WiFi password + api_token are
+    // no longer written in the clear. The sensor has no display/keyboard, so use
+    // "just works" pairing (no MITM protection, but it encrypts the link) with LE
+    // Secure Connections + bonding. ble_store_config_init() provides key storage.
+    ble_hs_cfg.sm_io_cap      = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_bonding     = 1;
+    ble_hs_cfg.sm_sc          = 1;   // LE Secure Connections
+    ble_hs_cfg.sm_our_key_dist   = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_store_config_init();
+
+    // Start NimBLE host task thread and return
     nimble_port_freertos_init(nimble_host_task);
 
 //    xTaskCreate(nimble_host_task, "PlantPulse", 8 * 1024, NULL, 5, NULL);
