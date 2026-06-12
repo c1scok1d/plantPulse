@@ -134,6 +134,8 @@ void get_wifi_mac_address()
 static char json_buffer[MAX_JSON_SIZE] = {0};
 static int json_index = 0;  // Track buffer position
 
+static void send_hostname(void);  // forward decl: notify hostname on 0xFEF9
+
 
 // Try to parse the accumulated provisioning JSON.
 // Returns true once a COMPLETE JSON object has been received (so the caller resets the
@@ -212,6 +214,13 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
         ESP_LOGI(TAG, "Full JSON received and parsed.");
         json_index = 0;  // Reset buffer for next message
         memset(json_buffer, 0, MAX_JSON_SIZE);
+
+        // Confirm provisioning to the app: notify the hostname on 0xFEF9. By now the
+        // app has connected + subscribed, so (unlike the connect-time notify) this one
+        // is reliably delivered. The app shows "provisioned ✓" on receipt instead of
+        // having to infer success from the BLE disconnect.
+        main_struct.isProvisioned = true;
+        send_hostname();
     }
 
     return 0;
@@ -667,7 +676,7 @@ void enter_deep_sleep(uint32_t seconds){
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
 
-static char current_version_number[] = "1781230854";  // HTTPS upload, OTA monotonic, NVS sleep, robust JSON, buffer fix
+static char current_version_number[] = "1781232142";  // provisioned-confirm notify on 0xFEF9 after config save
 
 void perform_ota_update(void);  // forward declaration
 
