@@ -39,7 +39,7 @@
 #define HOSTNAME_UUID 0xFEF9
 #define MANUFACTURER_NAME "Rodland Farms"
 // Define GPIO pin for the button
-#define BUTTON_GPIO 6
+#define BUTTON_GPIO 3   // V5: SW1 is on IO3 (RTC-capable, used for ext0 wake). Was GPIO6 (V4/legacy).
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define SERVER_URL "https://athome.rodlandfarms.com/firmware.json"
 #define CURRENT_VERSION "1.0.0"  // Define the current version number of your firmware
@@ -322,7 +322,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg){
     return 0;
 }
 
-#define LED_GPIO 2
+#define LED_GPIO 34   // V5: status LED (LED2) is on IO34. Was GPIO2 (V4/legacy).
 
 void blink_led(void *arg) {
     esp_rom_gpio_pad_select_gpio(LED_GPIO);
