@@ -45,33 +45,40 @@ not effort-ordered.
 - **JSON reassembly hardened — DONE (commit `35cc0c3`).** BLE config reassembly now
   commits on `cJSON_Parse` success (string-aware) instead of a trailing `}`, so a `}`
   inside a value at a chunk boundary can't trigger an early/failed parse.
-- **BLE provisioning encryption — ⚠️ ENCRYPTION HANDSHAKE VERIFIED; FULL PROVISIONING
-  NOT YET CONFIRMED (2026-06-12).** The crypto layer is in and demonstrably works:
+- **BLE provisioning encryption — ✅ DONE & VERIFIED END-TO-END ON HARDWARE (2026-06-12).**
   `0xFEFA` (config write) is `F_WRITE_ENC` and `0xFEF9` (hostname read) is `F_READ_ENC`,
   with LE Secure Connections + bonding (`sm_sc=1`, `sm_bonding=1`,
   `sm_io_cap=NO_INPUT_OUTPUT` → Just Works). The app pairs by **reading `0xFEF9` first** —
   the encrypted read forces the link up — then writes the config over the now-encrypted
-  link (firmware commits `08c225f`/`b0cb113`/`f70e254`; app `c27cdac`). On a V5 board
-  (`48:CA:43:BB:C6:9E`) + Galaxy S23 (Android 16) the encrypted read returned the hostname,
-  the config write was accepted, and the **phone formed a bond** (confirmed via
-  `dumpsys bluetooth_manager` — bonded under `com.rodlandfarms.plantpulse`). So secrets no
-  longer travel in the clear over BLE. Firmware build `1781232142`.
-  - **BUT the end-to-end cycle is still failing (2026-06-12, evening).** After the
-    encrypted config write the device does **not** complete provisioning as expected, and a
-    **deep-sleep boot loop may have regressed** (cf. the P2 `1ffe7da` fix — possibly
-    reintroduced by the encryption-path reboot changes in `b0cb113` "don't reboot until
-    provisioned"). **Next session: attach the serial monitor to the bench device** during a
-    provision and watch the post-write path (config save → `esp_restart` → WiFi join →
-    upload) to find where it stalls/loops. Do NOT treat this item as closed until a real
-    reading from a freshly-provisioned device lands in the backend.
-  - Residual (separate from the above): Just Works gives no MITM protection (encryption vs.
-    passive eavesdropping only) — acceptable for an IO-less sensor; revisit if a
-    display/keypad is ever added.
+  link (firmware commits `08c225f`/`b0cb113`/`f70e254`; app `c27cdac`). Verified on a V5
+  board (`48:CA:43:BB:C6:9E`) + Galaxy S23 (Android 16): encrypted read returned the
+  hostname, 11 config chunks parsed (`Parsed Data: SSID=…`), creds saved to NVS, phone
+  **formed a bond** (`dumpsys bluetooth_manager`, under `com.rodlandfarms.plantpulse`), and
+  the device then rebooted → joined WiFi → uploaded (`POST Request Successful / HTTP 200`) →
+  appeared on the dashboard → entered 8 h deep sleep. Secrets no longer travel in the clear
+  over BLE. Firmware build `1781276957`.
+  - The end-to-end failure seen on 2026-06-12 evening was **NOT** a BLE or deep-sleep
+    regression — it was the upload NULL-client crash (see P2 "Upload crash-loop" below),
+    which auto-rebooted the device right after provisioning and masqueraded as a boot loop.
+    Fixed; full cycle now verified with 0 panics.
+  - Residual: Just Works gives no MITM protection (encryption vs. passive eavesdropping
+    only) — acceptable for an IO-less sensor; revisit if a display/keypad is ever added.
 
 ## P2 — Robustness & operability
 
 ### Confirmed firmware bugs (observed on-device 2026-06-11 — see `docs/DIAGNOSIS-2026-06-11.md`)
 
+- **Upload crash-loop (NULL http client) — FIXED (commit `790459c`, 2026-06-12).** The POST
+  handler (`rest_methods.c`) built its `esp_http_client_config_t` **without `.url`** and set
+  the URL via `esp_http_client_set_url()` *after* init. But `esp_http_client_init()` requires
+  a URL (or host+path) at init time — with none it logs "config should have either URL or
+  host & path" and returns **NULL**; the next `esp_http_client_set_method(NULL,…)` then
+  null-derefs → `StoreProhibited` panic in `uploadReadingsTask` on **every wake**. A
+  freshly-provisioned device thus joined WiFi, read sensors, and crash-rebooted at the POST
+  forever — looked exactly like a deep-sleep boot loop but was an upload crash (introduced by
+  the `35cc0c3` POST rewrite). Fix: set `.url = server_uri` in the config + NULL-guard after
+  init (skip the upload, don't crash). Verified on-device: `POST Request Successful / HTTP
+  200 → Entering deep sleep 28800s`, 0 panics.
 - **Deep-sleep reboot loop — FIXED (commit `1ffe7da`).** `enter_deep_sleep()` reset
   *all 48 GPIOs* (incl. USB IO19/20 and the in-package SPI-flash pins) right before
   sleeping, crashing the chip before `esp_deep_sleep_start()` → reset every ~10 s; the
@@ -97,6 +104,15 @@ not effort-ordered.
   `ota/firmware.json` — no rebuild. Versions are **unix timestamps** so a release is
   self-dating. Confirmed OTA works in practice: both bench devices pulled and applied
   `1781229549` over the air.
+  - **⚠️ OTA manifest currently EMPTY (observed 2026-06-12).** On-device the check now logs
+    `OTA_CHECK: HTTP Response Code: 200` then `Empty firmware.json response` — i.e.
+    `https://athome.rodlandfarms.com/firmware.json` returns 200 with an **empty body**, so no
+    device can OTA. Non-fatal (the device logs it and continues to upload + sleep), but it
+    **blocks pushing the upload-crash fix (`1781276957`) to other deployed devices** — those
+    still run the crashing POST and can only be recovered by direct re-flash until OTA serves
+    a manifest again. **Follow-up:** restore `backend/ota/firmware.json` (string `version`) +
+    `firmware.bin` on the migrated host and re-verify the bind-mount; then publish
+    `1781276957`. See `docs/BACKEND-MIGRATION.md`.
 - **OTA version compare — FIXED (commit `35cc0c3`).** Now monotonic: versions are unix
   timestamps and `check_update` only updates when server > current (no downgrade).
   Replaced the buggy chunked branch (read into an unallocated pointer; self-`memcpy`)
@@ -142,10 +158,11 @@ not effort-ordered.
 
 ## Status (2026-06-12)
 
-P0 ✅ done · P1 ⚠️ BLE-encryption **handshake** verified on hardware (bond + encrypted
-read/write) but **full provisioning still failing** — possible deep-sleep boot-loop
-regression; needs serial-monitor diagnosis on the bench device (see P1 detail) · P2 ✅
-done · P3: app cleanup ✅, **Flutter upgrade in progress** — the
+P0 ✅ done · P1 ✅ **done** — encrypted BLE provisioning verified **end-to-end** on
+hardware (2026-06-12): provision → bond → WiFi → `POST 200` → dashboard → 8 h deep
+sleep, 0 panics. The "still failing" state from the night before turned out to be the
+**upload NULL-client crash** (P2, fixed `790459c`), not BLE/sleep. · P2 ✅ done · P3: app
+cleanup ✅, **Flutter upgrade in progress** — the
 upgraded app now lives in a new repo `mobile_app/plantpulse_flutter/`
 (`github.com/c1scok1d/plantpulse_flutter`, Flutter 3.24.5 / Dart 3.5.4, `wifi_scan`
 swap folded in); installs and runs on the S23. A startup crash from the
@@ -159,3 +176,8 @@ app on `127.0.0.1:8003`, DNS cut over to this box) and is **up and serving clean
 as of 2026-06-12** — the shared-host PHP-auto-upgrade risk is now gone. Full record in
 `docs/BACKEND-MIGRATION.md`. Remaining edge: a device provisioned while the API was down
 may hold a stale `api_token`; re-login + re-provision to refresh it.
+
+**Open items:** (1) **OTA manifest is empty** — `firmware.json` returns 200 with no body,
+so the upload-crash fix (`1781276957`) can't reach already-deployed devices over the air;
+they need a direct re-flash until the manifest is restored (see P2 OTA bullet). (2) Flutter
+upgrade smoke-tests on remaining screens. The bench V5 itself is now fully healthy.
