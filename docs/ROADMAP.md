@@ -102,17 +102,22 @@ not effort-ordered.
   never fired). Current published build: **`1781229549`** (V5 deep-sleep fix). Publish
   a new one: drop a new `ota/firmware.bin` + bump the version string in
   `ota/firmware.json` — no rebuild. Versions are **unix timestamps** so a release is
-  self-dating. Confirmed OTA works in practice: both bench devices pulled and applied
-  `1781229549` over the air.
-  - **⚠️ OTA manifest currently EMPTY (observed 2026-06-12).** On-device the check now logs
-    `OTA_CHECK: HTTP Response Code: 200` then `Empty firmware.json response` — i.e.
-    `https://athome.rodlandfarms.com/firmware.json` returns 200 with an **empty body**, so no
-    device can OTA. Non-fatal (the device logs it and continues to upload + sleep), but it
-    **blocks pushing the upload-crash fix (`1781276957`) to other deployed devices** — those
-    still run the crashing POST and can only be recovered by direct re-flash until OTA serves
-    a manifest again. **Follow-up:** restore `backend/ota/firmware.json` (string `version`) +
-    `firmware.bin` on the migrated host and re-verify the bind-mount; then publish
-    `1781276957`. See `docs/BACKEND-MIGRATION.md`.
+  self-dating. **Current published build: `1781279162`** (upload + OTA-read fixes; replaces
+  the earlier `1781229549`). Confirmed OTA works in practice: a bench V5 pulled and applied
+  `1781279162` over the air on 2026-06-12 (see the OTA-read-fix bullet above).
+  - **OTA "Empty firmware.json response" — FIXED (commit `338706c`, 2026-06-12).** This was
+    **NOT** a server problem — the manifest was served fine (curl got the 144-byte JSON). The
+    bug was in firmware `check_update()`: it called `esp_http_client_perform()` (which runs
+    the whole transaction and consumes the body) and *then* `esp_http_client_read()`, which
+    returned 0 → "Empty firmware.json response" → OTA never fired. Fix: `open()` +
+    `fetch_headers()` + `read()` (no `perform()`). Verified OTA end-to-end on the bench V5:
+    device on `1781278844` power-cycled → read manifest → saw `1781279162` newer →
+    `esp_https_ota` wrote partition `0x210000` → applied → rebooted onto `1781279162` →
+    settled ("No update required") → uploaded + slept. **Published build is now
+    `1781279162`** (`backend/ota/firmware.json` + `firmware.bin`, bind-mounted).
+    - Caveat unchanged: already-deployed devices run firmware that predates BOTH this read
+      fix and the cert-bundle fix, so they can't self-OTA and still need a one-time manual
+      re-flash to reach a build with working OTA. From `1781279162` onward, OTA is healthy.
 - **OTA version compare — FIXED (commit `35cc0c3`).** Now monotonic: versions are unix
   timestamps and `check_update` only updates when server > current (no downgrade).
   Replaced the buggy chunked branch (read into an unallocated pointer; self-`memcpy`)
@@ -177,7 +182,8 @@ as of 2026-06-12** — the shared-host PHP-auto-upgrade risk is now gone. Full r
 `docs/BACKEND-MIGRATION.md`. Remaining edge: a device provisioned while the API was down
 may hold a stale `api_token`; re-login + re-provision to refresh it.
 
-**Open items:** (1) **OTA manifest is empty** — `firmware.json` returns 200 with no body,
-so the upload-crash fix (`1781276957`) can't reach already-deployed devices over the air;
-they need a direct re-flash until the manifest is restored (see P2 OTA bullet). (2) Flutter
-upgrade smoke-tests on remaining screens. The bench V5 itself is now fully healthy.
+**Open items:** (1) **One-time manual re-flash of already-deployed devices** — they run
+firmware predating the OTA-read + cert-bundle fixes, so they can't self-OTA; once re-flashed
+to ≥`1781279162`, OTA is healthy going forward. (2) Flutter upgrade smoke-tests on remaining
+screens. The bench V5 is fully healthy: provisioning, upload, dashboard, OTA, and 8 h sleep
+all verified end-to-end on 2026-06-12.
