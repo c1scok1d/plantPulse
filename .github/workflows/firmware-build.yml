@@ -1,0 +1,23 @@
+name: firmware-build
+
+# Compile-check the ESP32-S3 firmware on every push/PR so a build break can't land.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (ESP-IDF v5.3.2, target esp32s3)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          # Project lives at the repo root (CMakeLists.txt + partitions.csv);
+          # sdkconfig is gitignored and regenerated from sdkconfig.defaults.
+          path: '.'
