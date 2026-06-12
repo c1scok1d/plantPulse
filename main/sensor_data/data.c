@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "main.h"
+#include "nvs_drv.h"
 #include "cJSON.h"
 #include "driver/i2c.h"
 #include "rest_methods.h"
@@ -170,7 +171,7 @@ void uploadReadingsTask(void *param)
 
     upload_data_t *data = (upload_data_t *)param;
 
-    const char *serverName = "http://athome.rodlandfarms.com";
+    const char *serverName = "https://athome.rodlandfarms.com";  // TLS (root-CA bundle in POST())
     const char *server_path = "/api/esp/data?";
     //const char* apiToken = "gS6gy56jcnE4Bh9ffcOgbsv8RbKuUQZqRrDCxuBu7ck2Moakxj0SJXH59ye0";
 
@@ -305,17 +306,9 @@ void monitor(){
     uploadReadings(moisture, battery.soc, battery.status, battery.crate, usb_present, charging, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
-    vTaskDelay(pdMS_TO_TICKS(3000));  
-    
-    // Sleep for 1 minute
-    //enter_deep_sleep(ONE_MIN_SLEEP);
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
-    // Sleep for 1 hour
-    //enter_deep_sleep(ONE_HOUR_SLEEP);
-
-    // Sleep for 8 hours
-    enter_deep_sleep(EIGHT_HOUR_SLEEP);
-
-    // Sleep for 12 hours
-    //enter_deep_sleep(TWELEVE_HOUR_SLEEP);
+    // Sleep duration comes from NVS (set at provisioning via optional "sleep_seconds"
+    // JSON key); defaults to 8 h. No more compile-time comment toggling.
+    enter_deep_sleep(nvs_get_sleep_seconds());
 }

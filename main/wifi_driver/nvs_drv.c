@@ -93,6 +93,36 @@ esp_err_t save_to_nvs(const char *ssid, const char *password, char *name, char *
     return err;
 }
 
+uint32_t nvs_get_sleep_seconds(void) {
+    nvs_handle_t nvs_handle;
+    uint32_t secs = DEFAULT_SLEEP_SECONDS;
+    if (nvs_open("storage", NVS_READONLY, &nvs_handle) != ESP_OK) {
+        return secs;  // not provisioned yet -> default
+    }
+    uint32_t stored = 0;
+    if (nvs_get_u32(nvs_handle, "sleep_secs", &stored) == ESP_OK && stored > 0) {
+        secs = stored;
+    }
+    nvs_close(nvs_handle);
+    return secs;
+}
+
+esp_err_t nvs_set_sleep_seconds(uint32_t seconds) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Error (%s) opening NVS for sleep_secs!", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_u32(nvs_handle, "sleep_secs", seconds);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+        printf("NVS stored sleep_secs %lu\n", (unsigned long)seconds);
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
 esp_err_t read_from_nvs(char *ssid, char *password, char *name, char *location, char *apiToken, uint8_t *value)
 {
     nvs_handle_t nvs_handle;

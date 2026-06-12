@@ -135,12 +135,16 @@ static char json_buffer[MAX_JSON_SIZE] = {0};
 static int json_index = 0;  // Track buffer position
 
 
-// Function to parse JSON
-void parse_json() {
+// Try to parse the accumulated provisioning JSON.
+// Returns true once a COMPLETE JSON object has been received (so the caller resets the
+// reassembly buffer), false if it isn't complete yet (keep accumulating BLE chunks).
+// Using cJSON_Parse success as the "complete" signal — instead of the old "buffer ends
+// in '}'" heuristic — is string-aware, so a '}' inside a value (e.g. a WiFi password)
+// landing on a chunk boundary can no longer trigger an early/failed parse.
+static bool parse_json(void) {
     cJSON *root = cJSON_Parse(json_buffer);
     if (!root) {
-        ESP_LOGE(TAG, "JSON Parsing Failed!");
-        return;
+        return false;  // not a complete JSON object yet; wait for more chunks
     }
 
     // Extract values from JSON
@@ -150,22 +154,31 @@ void parse_json() {
     cJSON *location = cJSON_GetObjectItem(root, "sensor_location");
     cJSON *api_token = cJSON_GetObjectItem(root, "api_token");
 
-    if (ssid && password && name && location && api_token) {
+    if (cJSON_IsString(ssid) && cJSON_IsString(password) && cJSON_IsString(name) &&
+        cJSON_IsString(location) && cJSON_IsString(api_token)) {
         strncpy(main_struct.ssid, ssid->valuestring, sizeof(main_struct.ssid) - 1);
         strncpy(main_struct.password, password->valuestring, sizeof(main_struct.password) - 1);
         strncpy(main_struct.name, name->valuestring, sizeof(main_struct.name) - 1);
         strncpy(main_struct.location, location->valuestring, sizeof(main_struct.location) - 1);
         strncpy(main_struct.apiToken, api_token->valuestring, sizeof(main_struct.apiToken) - 1);
 
+        // Optional: per-device deep-sleep interval (seconds). Backward-compatible —
+        // absent means keep the existing/default value.
+        cJSON *sleep = cJSON_GetObjectItem(root, "sleep_seconds");
+        if (cJSON_IsNumber(sleep) && sleep->valueint > 0) {
+            nvs_set_sleep_seconds((uint32_t)sleep->valueint);
+        }
+
         ESP_LOGI(TAG, "Parsed Data: SSID=%s, Name=%s, Location=%s", main_struct.ssid, main_struct.name, main_struct.location);
 
         // Save to NVS
         save_to_nvs(main_struct.ssid, main_struct.password, main_struct.name, main_struct.location, main_struct.apiToken, true);
     } else {
-        ESP_LOGE(TAG, "Missing JSON fields!");
+        ESP_LOGE(TAG, "JSON complete but required fields missing/invalid!");
     }
 
     cJSON_Delete(root);  // Free JSON object
+    return true;  // a complete object was consumed -> caller resets the buffer
 }
 
 
@@ -192,12 +205,11 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
     json_index += len;
     json_buffer[json_index] = '\0';  // Ensure null termination
 
-    ESP_LOGI(TAG, "Received JSON Chunk: %s", (char *)om->om_data);
+    ESP_LOGI(TAG, "Received JSON chunk (%d bytes)", (int)len);
 
-    // Check if the JSON transmission is complete (ends with '}')
-    if (json_buffer[json_index - 1] == '}') {
-        ESP_LOGI(TAG, "Full JSON received, parsing...");
-        parse_json();
+    // Try parsing after every chunk; reset only once a full JSON object is received.
+    if (parse_json()) {
+        ESP_LOGI(TAG, "Full JSON received and parsed.");
         json_index = 0;  // Reset buffer for next message
         memset(json_buffer, 0, MAX_JSON_SIZE);
     }
@@ -614,11 +626,11 @@ void ble_advert(void){
 
 
 // Function to enter deep sleep based on the selected duration
-void enter_deep_sleep(SleepDuration duration){
+void enter_deep_sleep(uint32_t seconds){
     static const char *TAG = "SLEEP";
-    uint64_t sleep_duration_us = (uint64_t)duration * (uint64_t)1000000; // Convert seconds to microseconds
+    uint64_t sleep_duration_us = (uint64_t)seconds * (uint64_t)1000000; // Convert seconds to microseconds
 
-    ESP_LOGI(TAG, "Entering deep sleep mode for %d seconds...", duration);
+    ESP_LOGI(TAG, "Entering deep sleep mode for %lu seconds...", (unsigned long)seconds);
     
     // Disable Wi-Fi before sleeping
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // Enable Wi-Fi power saving
@@ -648,13 +660,32 @@ void enter_deep_sleep(SleepDuration duration){
 
 
 #include <string.h>
+#include <stdlib.h>
 #include "esp_https_ota.h"
 #include "esp_crt_bundle.h"   // trust the ESP-IDF root-CA bundle instead of pinning a cert
 
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define JSON_URL "https://athome.rodlandfarms.com/firmware.json"
 
-static char current_version_number[] = "1781229549";  // V5: fix deep-sleep crash loop (drop GPIO-reset loop); 8h sleep
+static char current_version_number[] = "1781230854";  // HTTPS upload, OTA monotonic, NVS sleep, robust JSON, buffer fix
+
+void perform_ota_update(void);  // forward declaration
+
+// Versions are unix timestamps, so a newer build is numerically larger. Only update
+// when the server version is STRICTLY greater than ours — this makes OTA monotonic
+// (no accidental downgrade if an older firmware.json is ever served).
+static void maybe_apply_update(const char *server_version) {
+    char *TAG = "OTA_CHECK";
+    long long sv  = strtoll(server_version, NULL, 10);
+    long long cur = strtoll(current_version_number, NULL, 10);
+    ESP_LOGI(TAG, "Server version: %s, current: %s", server_version, current_version_number);
+    if (sv > cur) {
+        ESP_LOGI(TAG, "Newer firmware available -> starting OTA");
+        perform_ota_update();
+    } else {
+        ESP_LOGI(TAG, "No update required (server <= current).");
+    }
+}
 
 void perform_ota_update(){
     char *TAG = "OTA_UPDATE";
@@ -705,119 +736,43 @@ void check_update(void *pvParameters) {
          
         ESP_LOGI(TAG, "HTTP Response Code: %d", status_code); 
 
-        if (esp_http_client_is_chunked_response(client)) {
-            // If response is chunked, process chunks dynamically
-            char *output_buffer = NULL;
-            int output_len = 0;
-            int total_read = 0;
-            int bytes_read = 0;
+        // Read firmware.json with esp_http_client_read into a small fixed buffer (the
+        // file is tiny). Works for chunked and non-chunked responses and replaces the
+        // old buggy chunked branch (it read into an unallocated pointer and memcpy'd a
+        // buffer onto itself).
+        char buffer[256] = {0};
+        int total_read = 0, bytes_read = 0;
+        while (total_read < (int)sizeof(buffer) - 1 &&
+               (bytes_read = esp_http_client_read(client, buffer + total_read,
+                                                  sizeof(buffer) - 1 - total_read)) > 0) {
+            total_read += bytes_read;
+        }
+        buffer[total_read] = '\0';
 
-            // Read data in chunks and store in output_buffer
-            while (1) {
-                bytes_read = esp_http_client_read(client, output_buffer + total_read, 1024);
-                if (bytes_read < 0) {
-                    ESP_LOGE(TAG, "HTTP read failed: %s", esp_err_to_name(bytes_read));
-                    break;
-                } else if (bytes_read == 0) {
-                    // End of data received
-                    break;
-                }
-
-                // Resize the buffer if necessary
-                if (output_buffer == NULL) {
-                    output_buffer = malloc(1024);  // Initial allocation
+        if (total_read > 0) {
+            ESP_LOGI(TAG, "Received JSON: %s", buffer);
+            cJSON *json = cJSON_Parse(buffer);
+            if (json) {
+                const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
+                if (version && cJSON_IsString(version) && version->valuestring) {
+                    maybe_apply_update(version->valuestring);
                 } else {
-                    output_buffer = realloc(output_buffer, output_len + bytes_read);
+                    ESP_LOGE(TAG, "firmware.json missing string 'version'");
                 }
-
-                if (output_buffer == NULL) {
-                    ESP_LOGE(TAG, "Memory allocation failed");
-                    break;
-                }
-
-                memcpy(output_buffer + total_read, output_buffer, bytes_read);
-                total_read += bytes_read;
-            }
-
-            if (output_buffer != NULL) {
-                output_buffer[total_read] = '\0';  // Null-terminate the string
-                ESP_LOGI(TAG, "Received JSON: %s", output_buffer);
-
-                cJSON *json = cJSON_Parse(output_buffer);
-                if (json) {
-                    const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
-                    if (version && cJSON_IsString(version) && version->valuestring) {
-                        ESP_LOGI(TAG, "Server Version: %s", version->valuestring);
-                        if (strcmp(version->valuestring, current_version_number) != 0) {
-                            ESP_LOGI(TAG, "Version mismatch detected! Starting OTA...");
-                            perform_ota_update();
-                        } else {
-                            ESP_LOGI(TAG, "No update required. Already running the latest firmware.");
-                        }
-                    }
-                    cJSON_Delete(json);
-                } else {
-                    ESP_LOGE(TAG, "JSON Parsing Error");
-                }
-
-                free(output_buffer);
+                cJSON_Delete(json);
+            } else {
+                ESP_LOGE(TAG, "JSON Parsing Error");
             }
         } else {
-            // Handle non-chunked responses
-            int content_length = esp_http_client_get_content_length(client);
-            ESP_LOGI(TAG, "Content Length: %d", content_length);
-
-            if (content_length > 0) {
-                char *buffer = malloc(content_length + 1);
-                if (buffer == NULL) {
-                    ESP_LOGE(TAG, "Memory allocation failed");
-                } else {
-                    memset(buffer, 0, content_length + 1);
-                    int total_read = 0, bytes_read = 0;
-
-                    while (total_read < content_length) {
-                        bytes_read = esp_http_client_read(client, buffer + total_read, content_length - total_read);
-                        if (bytes_read <= 0) {
-                            ESP_LOGE(TAG, "HTTP read failed or connection closed early");
-                            break;
-                        }
-                        total_read += bytes_read;
-                    }
-
-                    buffer[total_read] = '\0';  // Null-terminate
-                    ESP_LOGI(TAG, "Received JSON: %s", buffer);
-
-                    cJSON *json = cJSON_Parse(buffer);
-                    if (json) {
-                        const cJSON *version = cJSON_GetObjectItemCaseSensitive(json, "version");
-                        if (version && cJSON_IsString(version) && version->valuestring) {
-                            ESP_LOGI(TAG, "Server Version: %s", version->valuestring);
-                            if (strcmp(version->valuestring, current_version_number) != 0) {
-                                ESP_LOGI(TAG, "Version mismatch detected! Starting OTA...");
-                                perform_ota_update();
-                            } else {
-                                ESP_LOGI(TAG, "No update required. Already running the latest firmware.");
-                            }
-                        }
-                        cJSON_Delete(json);
-                    } else {
-                        ESP_LOGE(TAG, "JSON Parsing Error");
-                    }
-
-                    free(buffer);
-                }
-            } else {
-                ESP_LOGE(TAG, "Invalid content length!");
-            }
+            ESP_LOGE(TAG, "Empty firmware.json response");
         }
     } else {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
     }
 
-    //esp_http_client_cleanup(client);
+    esp_http_client_cleanup(client);
 
-    ESP_LOGI(TAG, "Deleting check_update task.");
-    //vTaskDelete(NULL);  // Delete the FreeRTOS task properly
+    ESP_LOGI(TAG, "check_update done.");
 }
 
 

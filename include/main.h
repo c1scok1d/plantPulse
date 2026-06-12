@@ -27,7 +27,7 @@ typedef enum {
 extern main_struct_t main_struct;
 
 void ble_advert(void);
-void enter_deep_sleep(SleepDuration duration);
+void enter_deep_sleep(uint32_t seconds);  // seconds; SleepDuration enum gives named constants
 void initialize_sntp();
 void wait_for_time_sync();
 
