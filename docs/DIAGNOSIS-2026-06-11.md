@@ -84,3 +84,65 @@ This backend is **not** on the local fleet box — it's remote shared hosting. S
    buffer overflow, truncating response` during the data POST because the server
    returned a large HTML body. Keeps the device awake spamming for ~5 s (wastes
    battery). Relates to the prior commit "removed response.buffer output to log".
+
+---
+
+# Update — deep-sleep reboot loop found & FIXED (later on 2026-06-11)
+
+> Corrects the earlier note above. The line `SLEEP: Entering deep sleep` was
+> **printed but the device never actually slept** — it crashed immediately after
+> and rebooted, looping every ~10 s. The 8-hour sleep had effectively never worked
+> on V5.
+
+## Symptom
+
+A freshly provisioned V5 board POSTed successfully every cycle but then reset
+~10 s later instead of deep-sleeping 8 h. The backend showed readings every
+~8–12 s. The native USB also kept dropping (no stable `ttyACM` enumeration during
+the loop), which made serial capture nearly impossible.
+
+## Dead ends ruled out (in order)
+
+1. **ext0 button wake (IO3 floating).** IO3 (SW1) has only a 100 nF debounce cap
+   and **no external pull-up**, so the theory was the pin floats low and `ext0`
+   (active-low) fires instantly. Added an RTC pull-up → **no change.** Disabled
+   ext0 entirely and set a 60 s timer → **still looped at ~10 s, not 60 s.** So
+   ext0 was not the cause.
+2. **Brownout / low battery.** Disproven: the loop also happened on USB power and
+   on a healthy 89 %-SOC battery. A brownout would also print a distinct
+   `Brownout detector was triggered` line; it never did.
+3. **Short sleep timer.** `enter_deep_sleep(EIGHT_HOUR_SLEEP)` was correctly
+   selected and the µs math was fine.
+
+## Root cause
+
+`enter_deep_sleep()` ran a loop that called `gpio_reset_pin()` on **all 48 GPIOs**
+"to reduce leakage" just before `esp_deep_sleep_start()`. Serial capture (once the
+ext0-disabled build let USB stay up a bit longer) showed the loop logging
+`gpio: GPIO[2] … GPIO[18]` and then the device vanishing — it was resetting the
+**USB pins (IO19/20)** (killing the console) and, fatally, the **in-package SPI-flash
+pins**. Resetting the flash pins while executing from flash crashes the chip → reset
+→ repeat. It never reached `esp_deep_sleep_start()`.
+
+This single bug explains every symptom: the ~10 s loop, the USB dropping each cycle
+(so serial/flash were unreliable), and why ext0/brownout/timer fixes all failed.
+
+## Fix (commit `1ffe7da`)
+
+- **Removed the all-GPIO reset loop.** ESP-IDF already isolates GPIOs in deep sleep
+  (`sdkconfig: Configure to isolate all GPIO pins in sleep state`), so the loop was
+  redundant as well as dangerous.
+- **Kept ext0 button-wake** (SW1/IO3) with `rtc_gpio_pullup_en` + `rtc_gpio_hold_en`
+  across sleep (and `rtc_gpio_hold_dis` at boot) so the pin holds high and only wakes
+  on a real press.
+
+## Verification
+
+- 60 s test build → backend cadence went from ~10 s to a steady **~70 s** (60 s
+  sleep + ~10 s active).
+- 8 h production build (OTA `1781229549`) → **both bench devices (`48CA43BBC5F4`
+  and `48CA43BBC654`) picked up the OTA, posted once, and went silent** (deep
+  sleeping) instead of looping. Device 1 fixed itself purely over-the-air.
+
+> Lesson: never `gpio_reset_pin()` the USB or in-package flash/PSRAM pins. If manual
+> per-pin isolation is ever reintroduced, allow-list only safe GPIOs.

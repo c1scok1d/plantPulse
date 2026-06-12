@@ -24,14 +24,17 @@ not effort-ordered.
 4. **No tests, no CI in either repo** — the BLE contract especially deserves a
    regression guard so it can't silently diverge again.
 
-## P0 — Prove the current change works
+## P0 — Prove the current change works — ✅ DONE (2026-06-11)
 
-- **End-to-end BLE verification on hardware:** flash firmware → provision from the
-  app → confirm a reading reaches the backend.
-  - Prereqs (as of this writing): ESP-IDF not configured (`IDF_PATH` unset;
-    `~/esp/esp-idf` present), user not in `dialout`, no board enumerated on USB.
-  - See **`docs/SETUP.md`** for the IDF toolchain + flash/monitor setup.
-- **App provisioning confirmation:** subscribe to the hostname notify
+- **End-to-end BLE verification on hardware — ✅ DONE.** Two V5 boards
+  (`48CA43BBC5F4`, `48CA43BBC654`) were provisioned from the app over the new BLE
+  contract (`0xFEF3` / JSON → `0xFEFA`) and readings reached the backend. The
+  protocol realignment is confirmed on real hardware, not just by code review.
+- **`power_source` / `charge_status` — ✅ verified end-to-end.** USB↔Battery toggle
+  flips the reported value correctly (firmware GPIO13/14 → POST → backend → API).
+- **Deep-sleep reboot loop — ✅ FOUND & FIXED** (commit `1ffe7da`; see P2 and
+  `docs/DIAGNOSIS-2026-06-11.md`). The 8 h sleep had never actually worked on V5.
+- **App provisioning confirmation (still open):** subscribe to the hostname notify
   characteristic `0xFEF9` so the user sees "provisioned ✓" instead of inferring
   success from a BLE disconnect.
 
@@ -48,6 +51,16 @@ not effort-ordered.
 
 ### Confirmed firmware bugs (observed on-device 2026-06-11 — see `docs/DIAGNOSIS-2026-06-11.md`)
 
+- **Deep-sleep reboot loop — FIXED (commit `1ffe7da`).** `enter_deep_sleep()` reset
+  *all 48 GPIOs* (incl. USB IO19/20 and the in-package SPI-flash pins) right before
+  sleeping, crashing the chip before `esp_deep_sleep_start()` → reset every ~10 s; the
+  8 h sleep never actually worked on V5. Removed the loop (IDF auto-isolates GPIOs in
+  sleep already); kept ext0 button-wake with an RTC pull-up + hold on IO3. Verified on
+  two boards via OTA `1781229549` (they now sleep instead of looping). **Rule: never
+  `gpio_reset_pin()` USB/flash/PSRAM pins.**
+- **V5 pin map — FIXED (commit `1e07b93`).** Button moved GPIO6→**IO3** (`SW1`), status
+  LED GPIO2→**IO34** (`LED2`), per the EasyEDA V5 source. LED blink and factory-reset
+  long-press both confirmed on-device.
 - **OTA TLS — FIXED (commit `c3baf43`).** Was failing with
   `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED (0x8017)` against a stale pinned cert. Now uses
   `esp_crt_bundle_attach` (the ESP-IDF root-CA bundle, already in sdkconfig) — no
@@ -58,9 +71,11 @@ not effort-ordered.
   from `backend/ota/` bind-mounted into the container's `public/`, at
   `https://athome.rodlandfarms.com/firmware.{json,bin}`. **`version` is now a
   STRING** (firmware checks `cJSON_IsString`; the old JSON used a number, so OTA
-  never fired). Current published build: `1781210071` (the cert-bundle firmware).
-  Publish a new one: drop a new `ota/firmware.bin` + bump the version string in
-  `ota/firmware.json` — no rebuild.
+  never fired). Current published build: **`1781229549`** (V5 deep-sleep fix). Publish
+  a new one: drop a new `ota/firmware.bin` + bump the version string in
+  `ota/firmware.json` — no rebuild. Versions are **unix timestamps** so a release is
+  self-dating. Confirmed OTA works in practice: both bench devices pulled and applied
+  `1781229549` over the air.
 - **OTA version compare — STILL fragile (harden).** `check_update` updates whenever
   `strcmp(json.version, current) != 0` — *any* mismatch, so serving an older version
   string downgrades devices. Keep `firmware.json.version` == the published bin's
