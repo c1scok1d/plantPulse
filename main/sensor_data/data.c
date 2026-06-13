@@ -182,109 +182,53 @@ int readMoisture() {
     return moisture;
 }
 
-// Function to send data to the server in a FreeRTOS task
-void uploadReadingsTask(void *param)
+// Build the form-encoded body and POST it, with a small bounded retry so one flaky
+// connection or server blip doesn't permanently lose an 8-hourly reading.
+//
+// SYNCHRONOUS: monitor() runs this in monitor_task (large stack) and only deep-sleeps
+// AFTER it returns, so deep sleep can no longer cut off an in-flight upload. (The old
+// design spawned a detached task and slept after a fixed 3 s delay — shorter than the
+// 8 s HTTP timeout — so a slow TLS upload on weak WiFi was killed mid-flight and the
+// reading was lost, which read as "device offline" in the app.) Returns true on HTTP 200.
+bool uploadReadings(int moisture, float battery, bool battery_status, float crate,
+                    bool usb_present, bool charging, const char* hostname,
+                    const char* sensorName, const char* sensorLocation, const char* apiToken)
 {
-    // Cast the parameter back to the expected data structure
-    typedef struct {
-        int moisture;
-        float battery;
-        bool battery_status;
-        float crate;            // battery charge rate (%/hr): + charging, - discharging
-        bool usb_present;       // USB_DETECT (GPIO13)
-        bool charging;          // STAT (GPIO14), active-low
-        const char* hostname;
-        const char* sensorName;
-        const char* sensorLocation;
-        const char* apiToken;
-    } upload_data_t;
-
-    upload_data_t *data = (upload_data_t *)param;
-
-    const char *serverName = "https://athome.rodlandfarms.com";  // TLS (root-CA bundle in POST())
-    const char *server_path = "/api/esp/data?";
-    //const char* apiToken = "gS6gy56jcnE4Bh9ffcOgbsv8RbKuUQZqRrDCxuBu7ck2Moakxj0SJXH59ye0";
-
     // Clamp the moisture and battery value to the range [0, 100]
-    if (data->moisture > 100) {
-        data->moisture = 100;
-    } 
-    if (data->battery > 100) {
-        data->battery = 100;
-    }
+    if (moisture > 100) moisture = 100;
+    if (battery  > 100) battery  = 100;
 
-    // Construct the server URI
-    char server_uri[256];
-    snprintf(server_uri, sizeof(server_uri), "%s%s", serverName, server_path);
-
-    // charge_status keys off the charger STAT line (reliable), with charge rate as
-    // the discharge/idle tiebreaker. power_source is inferred (no solar-sense line).
-    const char *charge_status = data->charging       ? "charging"
-                              : (data->crate < -0.5f) ? "discharging"
+    // charge_status keys off the charger STAT line (reliable), with charge rate as the
+    // discharge/idle tiebreaker. power_source is inferred (no solar-sense line on V5).
+    const char *charge_status = charging       ? "charging"
+                              : (crate < -0.5f) ? "discharging"
                               : "idle";
-    const char *power_source  = data->usb_present ? "USB"
-                              : (data->charging   ? "Solar" : "Battery");
+    const char *power_source  = usb_present ? "USB" : (charging ? "Solar" : "Battery");
 
-    // Construct the HTTP request data
+    char server_uri[256];
+    snprintf(server_uri, sizeof(server_uri),
+             "https://athome.rodlandfarms.com/api/esp/data?");  // TLS (root-CA bundle in POST())
+
     char httpRequestData[512];
     snprintf(httpRequestData, sizeof(httpRequestData),
              "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d&charge_status=%s&power_source=%s",
-             data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status, charge_status, power_source);
+             apiToken, hostname, sensorName, sensorLocation, moisture, battery, battery_status, charge_status, power_source);
 
-    // Send the POST request
-    int httpResponseCode = POST(server_uri, httpRequestData);
-
-    // Check if the request was successful
-    if (httpResponseCode == 200) {
-        ESP_LOGI("UploadReadingsTask", "POST request successful. HTTP response code: %d", httpResponseCode);
-    } else {
-        ESP_LOGE("UploadReadingsTask", "POST request failed. HTTP response code: %d", httpResponseCode);
+    const int MAX_ATTEMPTS = 3;
+    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        int httpResponseCode = POST(server_uri, httpRequestData);
+        if (httpResponseCode == 200) {
+            ESP_LOGI("UploadReadings", "POST ok (attempt %d/%d)", attempt, MAX_ATTEMPTS);
+            return true;
+        }
+        ESP_LOGE("UploadReadings", "POST failed code=%d (attempt %d/%d)",
+                 httpResponseCode, attempt, MAX_ATTEMPTS);
+        if (attempt < MAX_ATTEMPTS) {
+            vTaskDelay(pdMS_TO_TICKS(1500 * attempt));  // linear backoff: 1.5 s, then 3 s
+        }
     }
-
-    // Free the allocated memory for task parameter
-    free(data);
-
-    // Delete the task once done
-    vTaskDelete(NULL);
-}
-
-void uploadReadings(int moisture, float battery, bool battery_status, float crate, bool usb_present, bool charging, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
-{
-    // Create a structure to pass the data to the task
-    typedef struct {
-        int moisture;
-        float battery;
-        bool battery_status;
-        float crate;
-        bool usb_present;
-        bool charging;
-        const char* hostname;
-        const char* sensorName;
-        const char* sensorLocation;
-        const char* apiToken;
-    } upload_data_t;
-
-    // Allocate memory for the data structure
-    upload_data_t *data = (upload_data_t *)malloc(sizeof(upload_data_t));
-    if (data == NULL) {
-        ESP_LOGE("UploadReadings", "Failed to allocate memory for data");
-        return;
-    }
-
-    // Fill the structure with the data
-    data->moisture = moisture;
-    data->battery = battery;
-    data->battery_status = battery_status;
-    data->crate = crate;
-    data->usb_present = usb_present;
-    data->charging = charging;
-    data->hostname = hostname;
-    data->sensorName = sensorName;
-    data->sensorLocation = sensorLocation;
-    data->apiToken = apiToken;
-
-    // Create a FreeRTOS task to upload the readings
-    xTaskCreate(uploadReadingsTask, "UploadReadingsTask", 8192, data, 5, NULL);
+    ESP_LOGE("UploadReadings", "giving up after %d attempts — reading lost", MAX_ATTEMPTS);
+    return false;
 }
 
 // Runs monitor() in its own task. monitor() does a TLS OTA check + uploads, which
@@ -332,11 +276,13 @@ void monitor(){
     bool usb_present = false, charging = false;
     read_power_state(&usb_present, &charging);
 
-    // Upload data
-    uploadReadings(moisture, battery.soc, battery.status, battery.crate, usb_present, charging, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
-
-    // Delay for response from server
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    // Upload data — synchronous + retried; returns only after success or all attempts,
+    // so no fixed post-upload delay is needed (the old vTaskDelay(3000) raced the 8 s
+    // HTTP timeout and could sleep through an in-flight upload).
+    bool uploaded = uploadReadings(moisture, battery.soc, battery.status, battery.crate,
+                                   usb_present, charging, main_struct.hostname,
+                                   main_struct.name, main_struct.location, main_struct.apiToken);
+    ESP_LOGI("MONITOR", "upload %s", uploaded ? "succeeded" : "FAILED (reading lost)");
 
     // Sleep duration comes from NVS (set at provisioning via optional "sleep_seconds"
     // JSON key); defaults to 8 h. No more compile-time comment toggling.
