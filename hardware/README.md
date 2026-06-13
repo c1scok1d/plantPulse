@@ -87,9 +87,39 @@ always null. The app is now null-safe (it simply hides the temp/humidity/VPD car
 data is absent — `IoT_monitoring_page`/`Records`), so adding the sensor lights them up with
 **no further app work**.
 
-**Hardware (V6):** add an **SHT40** (or AHT20/SHTC3) on the **existing I²C bus** (SDA=IO16,
-SCL=IO17 — already pulled up for the MAX17048). Address `0x44` (SHT40), distinct from the
-MAX17048's `0x36`. No new GPIO, no bus change — a one-part addition.
+**Hardware (V6):** add an **SHT40** on the **existing I²C bus** (SDA=IO16, SCL=IO17 — already
+pulled up for the MAX17048). Address `0x44` (SHT40-AD1B), distinct from the MAX17048's `0x36`.
+No new GPIO, no bus change — a one-part addition.
+
+### V6 sub-circuit — SHT40 (temperature / humidity)
+```
+   +3V3  ──┬──────────────┬─────────────► (always-on rail — NOT the switched SENSOR_3V3)
+           │              │
+        [100nF]        ┌──┴──┐ VDD
+           │           │ U?  │  SHT40-AD1B  (DFN-4, addr 0x44)
+          GND          │     │
+                  SDA ─┤     ├─ SCL
+                   │   └──┬──┘    │
+                   │     GND      │
+   I2C_SDA(IO16) ──┘              └── I2C_SCL(IO17)      ← reuse the existing MAX17048 bus
+        (bus pull-ups to +3V3 already present: ~4.7 kΩ each — no new pull-ups needed)
+```
+
+| Ref | Part (JLCPCB) | Value | Note |
+|---|---|---|---|
+| U? | **SHT40-AD1B** (Sensirion, C2761795) | I²C, 0x44 | ±0.2 °C / ±1.8 %RH; AHT20 (0x38) / SHTC3 (0x70) are fallbacks |
+| C | 0402 | **100 nF** | VDD decoupling, close to the sensor |
+
+**Power it from the always-on +3V3, *not* the switched `SENSOR_3V3`.** The SHT40 idles at
+~0.08 µA (single-shot draw ~320 µA for ~10 ms, i.e. sub-µA averaged), so gating saves nothing
+— and because its SDA/SCL stay pulled to the always-on bus (shared with the always-on
+MAX17048), a powered-down SHT40 would be **back-fed through its I²C ESD diodes** (~0.5 mA via
+the pull-ups), wasting more than it saves and risking latch-up. Keep VDD on the same rail as
+the bus pull-ups.
+
+**Layout:** place the SHT40 **away from self-heating parts** (the XC6220 LDO, MCP73831 charger,
+ESP module) — ideally a board edge / near a vent slot — or it reads warm. A small thermal-relief
+slot/cutout around it helps ambient accuracy.
 
 **Firmware (turnkey, ~1 hr once a board exists):**
 1. After `i2c_master_init()` in `monitor()` (`data.c`), probe `0x44` (address write, short
@@ -155,7 +185,7 @@ On the 1100 mAh / 4.1 Wh cell (80% usable, 3 wakes/day, ~1.1 mAh/day active):
 solar. It can't be done in firmware on V5 (nothing to switch) — it needs the load switch below.
 
 ### V6 sub-circuit — high-side PMOS load switch (recommended)
-Power the TLC555 + 1 MΩ timing net + SIG divider (and the future SHT40) from a **switched**
+Power the TLC555 + 1 MΩ timing net + SIG divider from a **switched**
 rail `SENSOR_3V3`, gated by GPIO21, **failsafe-off** in deep sleep:
 
 ```
@@ -167,7 +197,8 @@ rail `SENSOR_3V3`, gated by GPIO21, **failsafe-off** in deep sleep:
      ├────────┤ │
      │      G └┬┘
 IO21─┴─[1kΩ]───┘ D        IO21 LOW → ON (Vgs=-3.3V); HIGH/Hi-Z → OFF (R_PU holds gate=source)
-                ├──────────► SENSOR_3V3 ── TLC555 VDD, 1 MΩ timing, SIG divider, (V6) SHT40 VDD
+                ├──────────► SENSOR_3V3 ── TLC555 VDD, 1 MΩ timing, SIG divider
+                                            (the SHT40 stays on always-on +3V3 — see its section)
               [100nF]
                 │
                GND
@@ -182,7 +213,7 @@ IO21─┴─[1kΩ]───┘ D        IO21 LOW → ON (Vgs=-3.3V); HIGH/Hi-Z 
 
 **Zero-BOM alternative:** the TLC555 Icc is < 1 mA, so you may instead drive `SENSOR_3V3`
 directly from GPIO21 (skip Q1), **active-HIGH** — fine for low volume, slightly less clean for
-EMI/the I²C SHT40. If adding the SHT40 to this rail, prefer the PMOS.
+EMI. (This rail carries only the TLC555 sensing network; the SHT40 lives on always-on +3V3.)
 
 **Layout:** keep `SENSOR_3V3`/SIG off the antenna keep-out; route the high-impedance 1 MΩ
 timing node short.
@@ -216,7 +247,8 @@ capacitive sensing (TLC555), a working solar input, and OTA + encrypted/bonded B
 **ADD**
 - **Soil-probe high-side load switch** (sub-circuit above) — the #1 battery win (~4–6×).
 - **SHT40** (0x44) on the existing I²C bus → lights up the app's temp/humidity/VPD + disease
-  features with no app work. Put it on the **switched** `SENSOR_3V3` rail so it powers down too.
+  features with no app work. Keep it on **always-on +3V3** (sub-µA idle; gating it would
+  back-feed through the shared-bus pull-ups — see the SHT40 sub-circuit).
 - *Optional* **`SOLAR` sense** — a divider from `Solar+` to a spare ADC so solar is *measured*,
   not inferred (distinguishes "solar charging" from a dead panel).
 - *Optional* **`ALRT`→RTC-capable GPIO** (MAX17048) for low-battery wake/alert between cycles.
