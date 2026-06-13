@@ -155,6 +155,22 @@ not effort-ordered.
   stays unchanged, read T/RH, compute VPD, append `temp/humid/vpd` to the POST. Full plan
   (formulae, units, steps) in `hardware/README.md` → "V6 recommendation". Don't ship the
   driver until a board with the sensor exists to validate the read path.
+- **Soil-probe power gating — BLOCKED ON HARDWARE (V6), firmware ready & disabled.** Battery
+  analysis (2026-06-12) + the V5 EasyEDA schematic confirm `SOIL_SENSOR PWR` ties straight to
+  the always-on +3V3 rail (no MOSFET/load switch on the board — census `A1 C17 D3 R14 U6 LED1
+  SW1`, zero `Q`), so the probe front-end draws continuously between the 8 h reads and can't
+  be gated in firmware as-is. On an 8 h duty cycle that idle drain dominates battery life —
+  **measure it.** Firmware side is **DONE & inert**: `data.c` `readMoisture()` gates on read
+  behind `SOIL_PWR_GPIO` (default `-1` → compiled out, V5 byte-for-byte unchanged; commit
+  `9388903`). V6 hardware: add a high-side PMOS load switch on the probe rail (gate on a free
+  GPIO e.g. IO21, pull-to-OFF when Hi-Z), put the SIG divider on the switched side, then set
+  `SOIL_PWR_GPIO`. Full hardware+firmware plan in `hardware/README.md` → "gate the soil-probe
+  power rail".
+- **Solar (indoor) — V5 already has the input; harvesting is the limit, not the board.**
+  V5 diode-ORs `Solar+` (Schottky) with USB into `CHRG5V` → MCP73831, so charging is
+  hardware-autonomous. For the **indoor** use case a small panel is marginal (needs a
+  bright window + an MPPT harvester like BQ25570); prioritize sleep-current cuts (probe gate
+  above) + larger cell over indoor solar. Detail in `hardware/README.md` → "Solar charging".
 - **Flutter upgrade — IN PROGRESS (now `mobile_app/plantpulse_flutter/`, Flutter 3.24.5).**
   The upgraded app exists as its own repo (`wifi_iot → wifi_scan` folded in); the old
   `Plant_Pulse` was removed. Remaining: on-device smoke-tests across screens.
