@@ -238,6 +238,69 @@ and/or a larger cell to reach multi-year life on USB top-ups, rather than relyin
 solar. Reserve a panel for a bright-window SKU with an MPPT front-end. Keep the panel `Voc`
 within the diode-OR/charger input limits and the Schottky reverse-block in place.
 
+## V6 — optional: measure solar (SOLAR_SENSE) + low-battery wake (ALRT)
+
+### SOLAR_SENSE — measure the panel instead of inferring it
+Today solar is *inferred* (`USB_DETECT` low + `STAT` charging) — you can't tell "solar
+charging" from "panel dark / dead." A divider from the panel node to a spare **ADC1** pin lets
+firmware read the panel voltage directly.
+
+```
+  Solar+ ──[ R_T 1MΩ ]──┬──► SOLAR_SENSE  (IO4 / ADC1_CH3)
+ (panel side of         │
+  the OR Schottky)   [R_B 820kΩ] ‖ [C 100nF]
+                        │
+                       GND
+```
+`Vadc = Vsolar · Rb/(Rt+Rb) ≈ Vsolar · 0.45` → a 6.5 V-Voc panel maps to ~2.9 V (within the
+S3 ADC range at 12 dB atten; keep panel Voc ≤ ~6 V for the MCP73831 input anyway). Tap the
+**panel side of the Schottky** so you read the panel itself, not the OR'd 5 V bus (USB would
+otherwise mask it). 1 MΩ+820 kΩ holds the continuous divider leak to ~2.7 µA @ 5 V; the 100 nF
+gives the ADC sample-and-hold a low-impedance source. **Use ADC1** — ADC2 is unusable with WiFi up.
+
+| Ref | Part | Value | Note |
+|---|---|---|---|
+| R_T | 0402 | **1 MΩ** | top, to `Solar+` (panel side of Schottky) |
+| R_B | 0402 | **820 kΩ** | bottom, to GND |
+| C | 0402 | **100 nF** | across R_B — ADC filter / charge reservoir |
+
+Firmware: read `ADC1_CH3`, scale ×`(Rt+Rb)/Rb` (≈2.22) → `Solar+` volts; >~4.5 V ⇒ panel
+producing. Report *measured* solar in `power_source` instead of inferring it.
+**New pin: IO4 = ADC1_CH3.**
+
+### ALRT → GPIO — wake on low battery
+The MAX17048 `ALRT` (open-drain, active-low) is wired on the chip but unused. Route it to a
+free **RTC-capable** GPIO with a pull-up so the device can wake from deep sleep on a low-SOC /
+low-voltage alert instead of only noticing at the next 8 h wake.
+
+```
+  +3V3 ──[ R 100kΩ ]──┬──► ALRT_INT  (IO18 — RTC-capable, ext1 wake)
+                       │
+  MAX17048 ALRT ───────┘   (open-drain — pulls LOW on alert)
+```
+| Ref | Part | Value | Note |
+|---|---|---|---|
+| R | 0402 | **100 kΩ** | `ALRT` pull-up to always-on +3V3 |
+
+Firmware: set the MAX17048 alert thresholds over I²C (low-SOC %, low-V), then add IO18 as a
+deep-sleep wake source. **ext0 takes only one pin and the button already uses it (IO3)** — move
+**both to `ext1` `ANY_LOW`** (both are active-low) so the device wakes on button *or* battery
+alert. On wake, read the MAX17048 and clear the alert latch. **New pin: IO18 (RTC).**
+
+**Cost/benefit:** both are low-BOM niceties, not essentials. SOLAR_SENSE turns "is the panel
+working?" from a guess into a measurement — worth it if you ship a solar SKU. ALRT-wake only
+buys *earlier* low-battery notice than the existing 8 h cadence — nice for a prompt low-battery
+push, skippable otherwise. Neither touches the V5 fleet: guard the new pins behind defines (like
+the soil gate) so firmware uses them only when the board has them.
+
+### V6 new-pin summary
+| Pin | Net | Function | Type |
+|---|---|---|---|
+| IO21 | `SOIL_PWR_EN` | soil load-switch gate (active-low) | output |
+| IO4  | `SOLAR_SENSE` | panel-voltage divider | ADC1_CH3 |
+| IO18 | `ALRT_INT` | MAX17048 low-batt wake | RTC input (ext1) |
+| IO16/17 | I²C | + SHT40 (0x44) on existing bus | — |
+
 ## V6 — add / enhance / remove (summary)
 
 What V5 does well (keep): power-source + charge sensing (`USB_DETECT`/`STAT`), a real fuel
