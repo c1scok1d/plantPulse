@@ -11,8 +11,9 @@
 #include "driver/i2c.h"
 #include "rest_methods.h"
 #include "time.h"      // For time manipulation (including time-related functions like local time)
-#include "sntp.h" 
+#include "sntp.h"
 #include <stdio.h>
+#include <math.h>     // expf() for VPD
 #include "driver/i2c.h"
 
 static const char *TAG = "DATA";
@@ -147,8 +148,8 @@ BatteryStatus getBattery() {
 // deep sleep). Defaults below match that topology (GPIO21, ACTIVE-LOW). The GPIO
 // is left -1 so the existing V5 fleet (no switch) stays byte-for-byte identical
 // over OTA — on a V6 build just change SOIL_PWR_GPIO to GPIO_NUM_21.
-#define SOIL_PWR_GPIO          (-1)   // V6: set to GPIO_NUM_21 (PMOS load-switch gate). -1 = no gate (V5 fleet)
-#define SOIL_PWR_ACTIVE_LEVEL  (0)    // 0 = active-low (recommended bare-PMOS high-side); 1 = active-high (NMOS low-side / direct-GPIO)
+#define SOIL_PWR_GPIO          GPIO_NUM_21   // V6: PMOS load-switch gate on SENSOR_3V3. (main: -1 for the V5 fleet)
+#define SOIL_PWR_ACTIVE_LEVEL  (0)    // 0 = active-low (bare-PMOS high-side); 1 = active-high (NMOS low-side / direct-GPIO)
 #define SOIL_PWR_SETTLE_MS     (50)   // let the TLC555 settle after power-up before sampling (tune 20–100 ms)
 
 // Function to read moisture level
@@ -182,6 +183,107 @@ int readMoisture() {
     return moisture;
 }
 
+// ---- SHT40 temperature/humidity (V6, I2C 0x44 on the existing MAX17048 bus) -----
+// If an SHT40 answers at 0x44 its T/RH/VPD are appended to the upload; absent (V5)
+// the upload is byte-for-byte unchanged. Powered from always-on +3V3 (see hardware
+// README) so no power gating here. Units: temperature sent in °F; VPD computed in °C.
+#define SHT40_ADDR         0x44
+#define SHT40_CMD_MEASURE  0xFD   // high-precision single-shot (~8.3 ms)
+
+static bool sht40_present(void) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (SHT40_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_stop(cmd);
+    esp_err_t err = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    return err == ESP_OK;
+}
+
+// Returns true and fills *temp_c / *rh on success.
+static bool sht40_read(float *temp_c, float *rh) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (SHT40_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, SHT40_CMD_MEASURE, true);
+    i2c_master_stop(cmd);
+    esp_err_t err = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    if (err != ESP_OK) return false;
+
+    vTaskDelay(pdMS_TO_TICKS(10));  // conversion time
+
+    uint8_t d[6] = {0};
+    cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (SHT40_ADDR << 1) | I2C_MASTER_READ, true);
+    i2c_master_read(cmd, d, 5, I2C_MASTER_ACK);
+    i2c_master_read_byte(cmd, &d[5], I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    err = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    if (err != ESP_OK) return false;
+
+    uint16_t raw_t  = ((uint16_t)d[0] << 8) | d[1];   // (CRC bytes d[2], d[5] not verified)
+    uint16_t raw_rh = ((uint16_t)d[3] << 8) | d[4];
+    *temp_c = -45.0f + 175.0f * ((float)raw_t  / 65535.0f);
+    float h = -6.0f  + 125.0f * ((float)raw_rh / 65535.0f);
+    if (h < 0.0f) h = 0.0f;
+    if (h > 100.0f) h = 100.0f;
+    *rh = h;
+    return true;
+}
+
+// Vapor-pressure deficit (kPa) from temp(°C) + RH(%).
+static float compute_vpd(float tc, float rh) {
+    float svp = 0.6108f * expf(17.27f * tc / (tc + 237.3f));
+    return svp * (1.0f - rh / 100.0f);
+}
+
+// ---- Solar-panel voltage sense (V6 optional, ADC1_CH3 / GPIO4) ------------------
+// Divider 1 MΩ (to Solar+) / 820 kΩ (to GND) + 100 nF. -1 disables (no divider fitted).
+// Channel attenuation is configured in app_main() alongside the soil channel.
+#define SOLAR_SENSE_CH      (-1)            // V6 optional: ADC1_CHANNEL_3 (GPIO4); -1 = absent
+#define SOLAR_DIV_RATIO     (2.2195f)       // (1000+820)/820 — scale ADC mV back to panel mV
+#define SOLAR_PRESENT_MV    (4500)          // panel considered "producing" above this
+
+// Sets *present/*millivolts. When SOLAR_SENSE_CH < 0, reports not-present (caller falls
+// back to inferring solar from the charger STAT line).
+static void read_solar(bool *present, int *millivolts) {
+    *present = false; *millivolts = 0;
+#if SOLAR_SENSE_CH >= 0
+    adc1_config_channel_atten((adc1_channel_t)SOLAR_SENSE_CH, ADC_ATTEN_DB_11);  // width set globally in app_main
+    int raw = adc1_get_raw((adc1_channel_t)SOLAR_SENSE_CH);     // 0..4095 @ 12-bit, 11 dB atten
+    int adc_mv = raw * 3300 / 4095;                             // coarse (no eFuse cal) — fine for present/absent
+    int panel_mv = (int)(adc_mv * SOLAR_DIV_RATIO);
+    *millivolts = panel_mv;
+    *present = panel_mv > SOLAR_PRESENT_MV;
+#endif
+}
+
+// ---- MAX17048 low-battery alert config (V6 optional, paired with ALRT->IO18) ----
+// Set ALRT_CONFIG_PCT > 0 to make ALRT (open-drain) pull low at <= that SOC%. Only useful
+// when the board routes ALRT to a wake GPIO (see main.c ALRT_WAKE_GPIO). 0 = disabled.
+#define ALRT_CONFIG_PCT     (0)
+#if ALRT_CONFIG_PCT > 0
+#define MAX17048_REG_CONFIG 0x0C
+static void max17048_set_alert(uint8_t pct) {
+    if (pct < 1) pct = 1; if (pct > 32) pct = 32;
+    uint8_t athd = 32 - pct;                 // CONFIG[4:0] = 32 - threshold%
+    uint8_t hi = 0x97;                       // RCOMP default
+    uint8_t lo = athd & 0x1F;                // ALSC=0, ALRT cleared by writing 0
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, MAX17048_REG_CONFIG, true);
+    i2c_master_write_byte(cmd, hi, true);
+    i2c_master_write_byte(cmd, lo, true);
+    i2c_master_stop(cmd);
+    i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+}
+#endif
+
 // Function to send data to the server in a FreeRTOS task
 void uploadReadingsTask(void *param)
 {
@@ -193,6 +295,11 @@ void uploadReadingsTask(void *param)
         float crate;            // battery charge rate (%/hr): + charging, - discharging
         bool usb_present;       // USB_DETECT (GPIO13)
         bool charging;          // STAT (GPIO14), active-low
+        bool solar_present;     // SOLAR_SENSE: panel producing (V6 optional; false otherwise)
+        float temp_f;           // SHT40 temperature (°F)   — V6
+        float humidity;         // SHT40 relative humidity (%) — V6
+        float vpd;              // vapor-pressure deficit (kPa) — V6
+        bool env_present;       // SHT40 present/read this cycle
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -222,14 +329,23 @@ void uploadReadingsTask(void *param)
     const char *charge_status = data->charging       ? "charging"
                               : (data->crate < -0.5f) ? "discharging"
                               : "idle";
+    // power_source: USB if VBUS present; else Solar if the panel is measured producing
+    // (SOLAR_SENSE) or the charger is charging on battery; else Battery.
     const char *power_source  = data->usb_present ? "USB"
-                              : (data->charging   ? "Solar" : "Battery");
+                              : ((data->solar_present || data->charging) ? "Solar" : "Battery");
 
     // Construct the HTTP request data
     char httpRequestData[512];
-    snprintf(httpRequestData, sizeof(httpRequestData),
+    int n = snprintf(httpRequestData, sizeof(httpRequestData),
              "api_token=%s&hostname=%s&sensor=%s&location=%s&moisture=%d&batt=%.2f&battery_status=%d&charge_status=%s&power_source=%s",
              data->apiToken, data->hostname, data->sensorName, data->sensorLocation, data->moisture, data->battery, data->battery_status, charge_status, power_source);
+
+    // V6: append temp/humidity/VPD only when an SHT40 was read (backend renames temp->temperature,
+    // humid->humidity on ingest; absent => fields stay null, V5-identical on the wire).
+    if (data->env_present && n > 0 && n < (int)sizeof(httpRequestData)) {
+        snprintf(httpRequestData + n, sizeof(httpRequestData) - n,
+                 "&temp=%.1f&humid=%.1f&vpd=%.2f", data->temp_f, data->humidity, data->vpd);
+    }
 
     // Send the POST request
     int httpResponseCode = POST(server_uri, httpRequestData);
@@ -248,7 +364,7 @@ void uploadReadingsTask(void *param)
     vTaskDelete(NULL);
 }
 
-void uploadReadings(int moisture, float battery, bool battery_status, float crate, bool usb_present, bool charging, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
+void uploadReadings(int moisture, float battery, bool battery_status, float crate, bool usb_present, bool charging, bool solar_present, float temp_f, float humidity, float vpd, bool env_present, const char* hostname, const char* sensorName, const char* sensorLocation, const char* apiToken)
 {
     // Create a structure to pass the data to the task
     typedef struct {
@@ -258,6 +374,11 @@ void uploadReadings(int moisture, float battery, bool battery_status, float crat
         float crate;
         bool usb_present;
         bool charging;
+        bool solar_present;
+        float temp_f;
+        float humidity;
+        float vpd;
+        bool env_present;
         const char* hostname;
         const char* sensorName;
         const char* sensorLocation;
@@ -278,6 +399,11 @@ void uploadReadings(int moisture, float battery, bool battery_status, float crat
     data->crate = crate;
     data->usb_present = usb_present;
     data->charging = charging;
+    data->solar_present = solar_present;
+    data->temp_f = temp_f;
+    data->humidity = humidity;
+    data->vpd = vpd;
+    data->env_present = env_present;
     data->hostname = hostname;
     data->sensorName = sensorName;
     data->sensorLocation = sensorLocation;
@@ -326,14 +452,38 @@ void monitor(){
     
     i2c_master_init();
 
+#if ALRT_CONFIG_PCT > 0
+    max17048_set_alert(ALRT_CONFIG_PCT);   // arm the low-battery ALRT (paired with ALRT_WAKE_GPIO)
+#endif
+
     // Read battery and moisture data
     BatteryStatus battery = getBattery();
     int moisture = readMoisture();
     bool usb_present = false, charging = false;
     read_power_state(&usb_present, &charging);
 
+    // V6: optional temperature/humidity (SHT40 @ 0x44). Absent on V5 -> env_present=false.
+    float temp_f = 0.0f, humidity = 0.0f, vpd = 0.0f;
+    bool env_present = false;
+    if (sht40_present()) {
+        float tc;
+        if (sht40_read(&tc, &humidity)) {
+            vpd = compute_vpd(tc, humidity);
+            temp_f = tc * 9.0f / 5.0f + 32.0f;
+            env_present = true;
+            ESP_LOGI("SHT40", "T=%.1f°F  RH=%.0f%%  VPD=%.2f kPa", temp_f, humidity, vpd);
+        }
+    }
+
+    // V6: optional measured solar (else false -> power_source falls back to STAT inference).
+    bool solar_present = false; int solar_mv = 0;
+    read_solar(&solar_present, &solar_mv);
+    if (solar_present) ESP_LOGI("SOLAR", "panel ~%d mV (producing)", solar_mv);
+
     // Upload data
-    uploadReadings(moisture, battery.soc, battery.status, battery.crate, usb_present, charging, main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
+    uploadReadings(moisture, battery.soc, battery.status, battery.crate, usb_present, charging,
+                   solar_present, temp_f, humidity, vpd, env_present,
+                   main_struct.hostname, main_struct.name, main_struct.location, main_struct.apiToken);
 
     // Delay for response from server
     vTaskDelay(pdMS_TO_TICKS(3000));

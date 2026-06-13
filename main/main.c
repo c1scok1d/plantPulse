@@ -42,6 +42,7 @@
 #define MANUFACTURER_NAME "Rodland Farms"
 // Define GPIO pin for the button
 #define BUTTON_GPIO 3   // V5: SW1 is on IO3 (RTC-capable, used for ext0 wake). Was GPIO6 (V4/legacy).
+#define ALRT_WAKE_GPIO (-1)  // V6 optional: GPIO_NUM_18 (MAX17048 ALRT, RTC). -1 = button-only (ext0).
 #define OTA_URL "https://athome.rodlandfarms.com/firmware.bin"
 #define SERVER_URL "https://athome.rodlandfarms.com/firmware.json"
 #define CURRENT_VERSION "1.0.0"  // Define the current version number of your firmware
@@ -706,7 +707,17 @@ void enter_deep_sleep(uint32_t seconds){
     rtc_gpio_pullup_en(BUTTON_GPIO);
     rtc_gpio_pulldown_dis(BUTTON_GPIO);
     rtc_gpio_hold_en(BUTTON_GPIO);
+#if ALRT_WAKE_GPIO >= 0
+    // V6: also wake on the MAX17048 low-battery ALRT (active-low). ext0 is single-pin, so
+    // put button + ALRT on ext1 (ANY_LOW). Both have RTC pull-ups + hold.
+    rtc_gpio_pullup_en((gpio_num_t)ALRT_WAKE_GPIO);
+    rtc_gpio_pulldown_dis((gpio_num_t)ALRT_WAKE_GPIO);
+    rtc_gpio_hold_en((gpio_num_t)ALRT_WAKE_GPIO);
+    esp_sleep_enable_ext1_wakeup(((1ULL << BUTTON_GPIO) | (1ULL << ALRT_WAKE_GPIO)),
+                                 ESP_EXT1_WAKEUP_ANY_LOW);
+#else
     esp_sleep_enable_ext0_wakeup(BUTTON_GPIO, 0);  // 0 = wake on active-low (button pressed)
+#endif
 
     // Enter deep sleep
     esp_deep_sleep_start();
