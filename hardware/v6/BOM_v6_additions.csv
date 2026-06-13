@@ -1,0 +1,11 @@
+Comment,Designator,Footprint,LCSC Part #,Group,Notes
+AO3401A,Q1,SOT-23-3,C15127,soil-load-switch,P-ch logic-level MOSFET; high-side switch on SENSOR_3V3
+100kOhm 1% 0402,R31,R0402,C25741,soil-load-switch,Q1 gate pull-up to +3V3 (OFF when GPIO Hi-Z)
+1kOhm 1% 0402,R32,R0402,C11702,soil-load-switch,Q1 gate series resistor from IO21 (optional but recommended)
+100nF 50V X7R 0402,C18,C0402,C1525,soil-load-switch,TLC555 decoupling moved onto SENSOR_3V3 (may replace an existing V5 cap)
+SHT40-AD1B,U19,DFN-4-1.5x1.5,C2761795,temp-humidity,Sensirion T/RH sensor; I2C addr 0x44 on existing bus (IO16/17)
+100nF 50V X7R 0402,C19,C0402,C1525,temp-humidity,SHT40 VDD decoupling (close to U19)
+1MOhm 1% 0402,R33,R0402,C22935,solar-sense-OPTIONAL,SOLAR_SENSE divider top to Solar+ (verify LCSC vs current JLC stock)
+820kOhm 1% 0402,R34,R0402,C159966,solar-sense-OPTIONAL,SOLAR_SENSE divider bottom to GND (verify LCSC vs current JLC stock)
+100nF 50V X7R 0402,C20,C0402,C1525,solar-sense-OPTIONAL,SOLAR_SENSE ADC filter / S&H reservoir
+100kOhm 1% 0402,R35,R0402,C25741,alrt-wake-OPTIONAL,MAX17048 ALRT open-drain pull-up to +3V3
