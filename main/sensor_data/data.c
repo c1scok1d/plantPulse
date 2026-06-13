@@ -135,19 +135,21 @@ BatteryStatus getBattery() {
 }
 
 // ---- Soil-probe power gating -------------------------------------------------
-// V5 (and earlier) wire the SOIL_SENSOR PWR pin straight to the always-on +3V3
-// rail (no MOSFET / load switch on the board — confirmed against the V5 EasyEDA
-// schematic, hardware/README), so the probe front-end draws continuously, 24/7,
-// between the 8-hourly reads. There is nothing for firmware to switch.
+// The V5 soil sensor is a TLC555 capacitive oscillator wired to the always-on
+// +3V3 rail (no MOSFET / load switch on the board — confirmed against the V5
+// EasyEDA schematic; see hardware/README "gate the soil-probe power rail"). So it
+// oscillates 24/7 between the 8-hourly reads (~0.2–0.7 mA continuous) and is the
+// dominant battery drain — gating it is a ~4–6x life win. Firmware can't switch
+// what the board doesn't, so this is BLOCKED ON HARDWARE for V5.
 //
-// On a board that ADDS a high-side load switch (or routes PWR to a spare GPIO),
-// set SOIL_PWR_GPIO to that pin and the code below powers the probe only for the
-// measurement, then cuts it. Leaving it at -1 keeps V5 byte-for-byte identical
-// (safe over OTA). HW rule for the switched board: add a pull on the gate so the
-// switch defaults OFF when the GPIO is Hi-Z (IDF tristates GPIOs in deep sleep).
-#define SOIL_PWR_GPIO          (-1)   // e.g. GPIO_NUM_21 on a switched V6; -1 = no gate (V5)
-#define SOIL_PWR_ACTIVE_LEVEL  (1)    // 1 = active-high (NMOS low-side / direct-GPIO / PMOS+predriver); 0 = active-low (bare PMOS high-side)
-#define SOIL_PWR_SETTLE_MS     (50)   // let the capacitive front-end settle after power-up before sampling
+// V6 adds a high-side PMOS load switch on the sensor rail, gate on GPIO21, with a
+// gate pull-up so the switch is OFF when the GPIO is Hi-Z (IDF tristates GPIOs in
+// deep sleep). Defaults below match that topology (GPIO21, ACTIVE-LOW). The GPIO
+// is left -1 so the existing V5 fleet (no switch) stays byte-for-byte identical
+// over OTA — on a V6 build just change SOIL_PWR_GPIO to GPIO_NUM_21.
+#define SOIL_PWR_GPIO          (-1)   // V6: set to GPIO_NUM_21 (PMOS load-switch gate). -1 = no gate (V5 fleet)
+#define SOIL_PWR_ACTIVE_LEVEL  (0)    // 0 = active-low (recommended bare-PMOS high-side); 1 = active-high (NMOS low-side / direct-GPIO)
+#define SOIL_PWR_SETTLE_MS     (50)   // let the TLC555 settle after power-up before sampling (tune 20–100 ms)
 
 // Function to read moisture level
 int readMoisture() {
